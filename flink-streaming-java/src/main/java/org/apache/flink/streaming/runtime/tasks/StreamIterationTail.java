@@ -18,19 +18,26 @@
 package org.apache.flink.streaming.runtime.tasks;
 
 import org.apache.flink.annotation.Internal;
+import org.apache.flink.api.common.typeutils.TypeSerializer;
+import org.apache.flink.core.memory.DataInputView;
+import org.apache.flink.core.memory.DataOutputView;
 import org.apache.flink.runtime.execution.Environment;
+import org.apache.flink.streaming.api.graph.StreamConfig;
 import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
 import org.apache.flink.streaming.api.operators.Output;
 import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.runtime.io.BlockingQueueBroker;
 import org.apache.flink.streaming.runtime.streamrecord.LatencyMarker;
+import org.apache.flink.streaming.runtime.streamrecord.StreamElementSerializer;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.util.OutputTag;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+import java.util.Map;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.TimeUnit;
 
@@ -63,8 +70,8 @@ public class StreamIterationTail<IN> extends OneInputStreamTask<IN, IN> {
 		LOG.info("Iteration tail {} trying to acquire feedback queue under {}", getName(), brokerID);
 
 		@SuppressWarnings("unchecked")
-		BlockingQueue<StreamRecord<IN>> dataChannel =
-				(BlockingQueue<StreamRecord<IN>>) BlockingQueueBroker.INSTANCE.get(brokerID);
+		SpillableQueue<StreamRecord<IN>> dataChannel =
+				(SpillableQueue<StreamRecord<IN>>) BlockingQueueBroker.INSTANCE.get(brokerID);
 
 		LOG.info("Iteration tail {} acquired feedback queue {}", getName(), brokerID);
 
@@ -98,13 +105,13 @@ public class StreamIterationTail<IN> extends OneInputStreamTask<IN, IN> {
 	private static class IterationTailOutput<IN> implements Output<StreamRecord<IN>> {
 
 		@SuppressWarnings("NonSerializableFieldInSerializableClass")
-		private final BlockingQueue<StreamRecord<IN>> dataChannel;
+		private final SpillableQueue<StreamRecord<IN>> dataChannel;
 
 		private final long iterationWaitTime;
 
 		private final boolean shouldWait;
 
-		IterationTailOutput(BlockingQueue<StreamRecord<IN>> dataChannel, long iterationWaitTime) {
+		IterationTailOutput(SpillableQueue<StreamRecord<IN>> dataChannel, long iterationWaitTime) {
 			this.dataChannel = dataChannel;
 			this.iterationWaitTime = iterationWaitTime;
 			this.shouldWait =  iterationWaitTime > 0;
@@ -127,7 +134,7 @@ public class StreamIterationTail<IN> extends OneInputStreamTask<IN, IN> {
 				else {
 					dataChannel.put(record);
 				}
-			} catch (InterruptedException e) {
+			} catch (InterruptedException | IOException e) {
 				throw new RuntimeException(e);
 			}
 		}

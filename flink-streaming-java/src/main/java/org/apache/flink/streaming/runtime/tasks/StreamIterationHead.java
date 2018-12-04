@@ -19,15 +19,22 @@ package org.apache.flink.streaming.runtime.tasks;
 
 import org.apache.flink.annotation.Internal;
 import org.apache.flink.api.common.JobID;
+import org.apache.flink.api.common.typeutils.TypeSerializer;
+import org.apache.flink.core.memory.DataInputView;
+import org.apache.flink.core.memory.DataOutputView;
 import org.apache.flink.runtime.execution.Environment;
+import org.apache.flink.streaming.api.graph.StreamConfig;
 import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.runtime.io.BlockingQueueBroker;
 import org.apache.flink.streaming.runtime.io.RecordWriterOutput;
+import org.apache.flink.streaming.runtime.streamrecord.StreamElementSerializer;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -49,6 +56,16 @@ public class StreamIterationHead<OUT> extends OneInputStreamTask<OUT, OUT> {
 
 	// ------------------------------------------------------------------------
 
+	private StreamElementSerializer<OUT> createRecordSerializer() {
+		StreamTask containingTask = this;
+		final ClassLoader userCodeClassloader = containingTask.getUserCodeClassLoader();
+		Map<Integer, StreamConfig> chainedConfigs = configuration.getTransitiveChainedTaskConfigsWithSelf(userCodeClassloader);
+		Environment taskEnvironment = this.getEnvironment();
+		StreamConfig upStreamConfig = chainedConfigs.values().iterator().next();
+		TypeSerializer<OUT> outSerializer = upStreamConfig.getTypeSerializerOut(taskEnvironment.getUserClassLoader());
+		return new StreamElementSerializer<OUT>(outSerializer);
+	}
+
 	@Override
 	protected void run() throws Exception {
 
@@ -63,7 +80,10 @@ public class StreamIterationHead<OUT> extends OneInputStreamTask<OUT, OUT> {
 		final long iterationWaitTime = getConfiguration().getIterationWaitTime();
 		final boolean shouldWait = iterationWaitTime > 0;
 
-		final BlockingQueue<StreamRecord<OUT>> dataChannel = new ArrayBlockingQueue<StreamRecord<OUT>>(1);
+//		final BlockingQueue<StreamRecord<OUT>> dataChannel = new ArrayBlockingQueue<StreamRecord<OUT>>(1);
+		StreamElementSerializer<OUT> streamElementSerializer = createRecordSerializer();
+		SpillRecordSerializer<OUT> serializer = new SpillRecordSerializer<OUT>(streamElementSerializer);
+		SpillableQueue<StreamRecord<OUT>> dataChannel = new SpillableQueue<>(1024 * 8, serializer);
 
 		// offer the queue for the tail
 		BlockingQueueBroker.INSTANCE.handIn(brokerID, dataChannel);
@@ -101,6 +121,25 @@ public class StreamIterationHead<OUT> extends OneInputStreamTask<OUT, OUT> {
 			// make sure that we remove the queue from the broker, to prevent a resource leak
 			BlockingQueueBroker.INSTANCE.remove(brokerID);
 			LOG.info("Iteration head {} removed feedback queue under {}", getName(), brokerID);
+		}
+	}
+
+	private static class SpillRecordSerializer<IN> implements ItemSerializer<StreamRecord<IN>>{
+
+		private StreamElementSerializer<IN> serializer;
+
+		SpillRecordSerializer(StreamElementSerializer<IN> serializer) {
+			this.serializer = serializer;
+		}
+
+		@Override
+		public void serialize(StreamRecord<IN> value, DataOutputView target) throws IOException {
+			serializer.serialize(value, target);
+		}
+
+		@Override
+		public StreamRecord<IN> deserialize(DataInputView source) throws IOException {
+			return (StreamRecord<IN>) serializer.deserialize(source);
 		}
 	}
 

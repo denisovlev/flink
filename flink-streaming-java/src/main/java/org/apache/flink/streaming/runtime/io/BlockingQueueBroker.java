@@ -19,6 +19,7 @@ package org.apache.flink.streaming.runtime.io;
 
 import org.apache.flink.annotation.Internal;
 import org.apache.flink.runtime.iterative.concurrent.Broker;
+import org.apache.flink.streaming.runtime.tasks.SpillableQueue;
 
 import java.util.concurrent.BlockingQueue;
 
@@ -29,7 +30,7 @@ import java.util.concurrent.BlockingQueue;
  * streams.
  */
 @Internal
-public class BlockingQueueBroker extends Broker<BlockingQueue<?>> {
+public class BlockingQueueBroker extends Broker<SpillableQueue<?>> {
 
 	/** Singleton instance. */
 	public static final BlockingQueueBroker INSTANCE = new BlockingQueueBroker();
