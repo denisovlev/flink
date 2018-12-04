@@ -6,7 +6,12 @@ import org.apache.flink.core.memory.DataInputViewStreamWrapper;
 import org.apache.flink.core.memory.DataOutputView;
 import org.apache.flink.core.memory.DataOutputViewStreamWrapper;
 
-import java.io.*;
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Iterator;
@@ -15,6 +20,11 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 
+/**
+ * SpillableQueue: Implementation of HALF algorithm for queue spilling to disk.
+ * http://ilpubs.stanford.edu:8090/618/1/2003-63.pdf
+ * @param <E>
+ */
 public class SpillableQueue<E> {
 
 	public static void main(String[] args) throws Exception {
@@ -41,17 +51,17 @@ public class SpillableQueue<E> {
 	private BackDrainableQueue<E> tail;
 	private LinkedBlockingQueue<SpilledBuffer<E>> spilled;
 
-	private int M;
+	private int m;
 
 	private ItemSerializer<E> serializer;
 
 	final ReentrantLock lock;
 
-	SpillableQueue(Integer M, ItemSerializer<E> serializer) {
-		this.M = M;
+	SpillableQueue(Integer m, ItemSerializer<E> serializer) {
+		this.m = m;
 		this.serializer = serializer;
-		head = new BackDrainableQueue<E>(2*M);
-		tail = new BackDrainableQueue<E>(M);
+		head = new BackDrainableQueue<E>(2 * m);
+		tail = new BackDrainableQueue<E>(m);
 		spilled = new LinkedBlockingQueue<>();
 		lock = new ReentrantLock(true);
 	}
@@ -71,10 +81,10 @@ public class SpillableQueue<E> {
 			} else {
 				cur = tail;
 			}
-			if(cur.remainingCapacity() == 0) {
+			if (cur.remainingCapacity() == 0) {
 				System.out.println("Write-OUT");
-				SpilledBuffer<E> buf = new SpilledBuffer<E>(M, serializer);
-				cur.drainBackTo(buf.getRecords(), M);
+				SpilledBuffer<E> buf = new SpilledBuffer<E>(m, serializer);
+				cur.drainBackTo(buf.getRecords(), m);
 				buf.writeOut();
 				spilled.put(buf);
 				System.out.println("Number of spilled buffers:" + spilled.size());
@@ -152,6 +162,7 @@ class BackDrainableQueue<E> extends ArrayBlockingQueue<E>{
 
 interface ItemSerializer<E> {
 	public void serialize(E value, DataOutputView target) throws IOException;
+
 	public E deserialize(DataInputView source) throws IOException;
 }
 
