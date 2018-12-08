@@ -193,7 +193,7 @@ under the License.
 
 							<archive>
 								<manifestEntries>
-									<program-class>org.apache.flink.streaming.examples.deadlockingiteration.DeadlockingIterateExample</program-class>
+									<program-class>org.apache.flink.streaming.examples.iteration.DeadlockingIterateExample</program-class>
 								</manifestEntries>
 							</archive>
 
