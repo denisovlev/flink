@@ -181,6 +181,28 @@ under the License.
 						</configuration>
 					</execution>
 
+					<!-- Deadlocking Iteration -->
+					<execution>
+						<id>DeadlockingIteration</id>
+						<phase>package</phase>
+						<goals>
+							<goal>jar</goal>
+						</goals>
+						<configuration>
+							<classifier>DeadlockingIteration</classifier>
+
+							<archive>
+								<manifestEntries>
+									<program-class>org.apache.flink.streaming.examples.deadlockingiteration.DeadlockingIterateExample</program-class>
+								</manifestEntries>
+							</archive>
+
+							<includes>
+								<include>org/apache/flink/streaming/examples/iteration/*.class</include>
+							</includes>
+						</configuration>
+					</execution>
+
 					<!-- IncrementalLearning -->
 					<execution>
 						<id>IncrementalLearning</id>
