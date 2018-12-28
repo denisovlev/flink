@@ -1,24 +1,6 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *    http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 package org.apache.flink.streaming.examples.iteration;
 
-import org.apache.flink.api.common.functions.MapFunction;
-import org.apache.flink.api.java.utils.ParameterTool;
+import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.streaming.api.collector.selector.OutputSelector;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.IterativeStream;
@@ -28,108 +10,150 @@ import org.apache.flink.streaming.api.functions.source.SourceFunction;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Random;
 
-/**
- * Example illustrating iterations in Flink streaming.
- * <p> The program sums up random numbers and counts additions
- * it performs to reach a specific threshold in an iterative streaming fashion. </p>
- *
- * <p>
- * This example shows how to use:
- * <ul>
- * <li>streaming iterations,
- * <li>buffer timeout to enhance latency,
- * <li>directed outputs.
- * </ul>
- * </p>
- */
 public class DeadlockingIterateExample {
-
-	private static final int BOUND = 100;
-
-	// *************************************************************************
-	// PROGRAM
-	// *************************************************************************
-
 	public static void main(String[] args) throws Exception {
+		long fastPeriodMs = 5 * 1000;
+		long slowPeriodMs = 5 * 1000;
+		long fastPeriodSpeed = 0;
+		long slowPeriodSpeed = 100;
+		int cycles = 5;
+		int pctSendToOutput = 1;
 
-		// Checking input parameters
-		final ParameterTool params = ParameterTool.fromArgs(args);
-
-		// set up input for the stream of integer pairs
-
-		// obtain execution environment and set setBufferTimeout to 1 to enable
-		// continuous flushing of the output buffers (lowest latency)
-		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment()
-			.setBufferTimeout(1);
-
-		// make parameters available in the web interface
-		env.getConfig().setGlobalJobParameters(params);
-
-		// create input stream of integer pairs
-		DataStream<Integer> inputStream;
-		if (params.has("input")) {
-			inputStream = env.readTextFile(params.get("input")).map(new NumberInputMap());
-		} else {
-			System.out.println("Executing Iterate example with default input data set.");
-			System.out.println("Use --input to specify file input.");
-			inputStream = env.addSource(new NumberSource());
+		if (args.length >= 6) {
+			fastPeriodMs = Long.parseLong(args[0]);
+			slowPeriodMs = Long.parseLong(args[1]);
+			fastPeriodSpeed = Long.parseLong(args[2]);
+			slowPeriodSpeed = Long.parseLong(args[3]);
+			cycles = Integer.parseInt(args[4]);
+			pctSendToOutput = Integer.parseInt(args[5]);
 		}
 
-		// create an iterative data stream from the input with 5 second timeout
-		IterativeStream<Integer> it = inputStream.map(new InputMap()).iterate(5000);
+		Random random = new Random();
 
-		// apply the step function to get the next Fibonacci number
-		// increment the counter and split the output with the output selector
-		SplitStream<Integer> step = it.map(new Step()).split(new MySelector());
+		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment().setBufferTimeout(1);
 
-		// close the iteration by selecting the tuples that were directed to the
-		// 'iterate' channel in the output selector
-		it.closeWith(step.select("iterate"));
+		DataStream<Long> inputStream = env.addSource(
+			new NumberSource(fastPeriodMs, slowPeriodMs, fastPeriodSpeed, slowPeriodSpeed, cycles));
 
-		//		SingleOutputStreamOperator<Integer> step = it.map(new Step());
-		//		it.closeWith(step);
+		IterativeStream<Long> iteration = inputStream.map(value -> value).iterate();
+		DataStream<Long> iterationBody = iteration.map(value -> value);
 
-		// to produce the final output select the tuples directed to the
-		// 'output' channel then get the input pairs that have the greatest iteration counter
-		// on a 1 second sliding window
-		DataStream<Integer> numbers = step.select("output").map(new OutputMap());
+		int finalPctSendToOutput = pctSendToOutput;
+		SplitStream<Long> splitStream = iterationBody.split((OutputSelector<Long>) value -> {
+			List<String> output = new ArrayList<>();
+			// Send some numbers to output (set in pctSendToOutput), the rest back to the iteration
+			if (random.nextInt(100) < finalPctSendToOutput) {
+				output.add("output");
+			} else {
+				output.add("iterate");
+			}
+			return output;
+		});
 
-		// emit results
-		if (params.has("output")) {
-			numbers.writeAsText(params.get("output"));
-		} else {
-			System.out.println("Printing result to stdout. Use --output to specify output path.");
-			numbers.print();
-		}
+		// Send 'iterate' back to the feedback loop
+		iteration.closeWith(splitStream.select("iterate"));
 
-		// execute the program
-		env.execute("Streaming Iteration Example");
+		// Send 'output' to output
+		DataStream<Long> output = splitStream.select("output");
+
+		output.print();
+
+		env.execute("Deadlocking Iteration Example");
 	}
 
-	// *************************************************************************
-	// USER FUNCTIONS
-	// *************************************************************************
-
-	private static class NumberSource implements SourceFunction<Integer> {
-		private static final long serialVersionUID = 1L;
-
+	/**
+	 * Number Generator (long) with speed variations
+	 *
+	 * The parameter fastPeriodMs provides the length of time (in ms) to generate numbers at speed specified in
+	 * fastPeriodSpeed (by timer sleep, in ms). Likewise for slowPeriodMs and slowPeriodSpeed.
+	 * These periods will be run in the # of cycles specified in the cycles parameter. 1 cycle = 1 fast, 1slow
+	 * If cycles = -1, there is no speed variation (no sleep), and the number generation time is unbounded
+	 * If *Speed is 0, Timer.sleep is not called at all.
+	 * <p>
+	 * Example: fastPeriodMs=5s, fastPeriodSpeed=0, slowPeriodMs=5s, slowPeriodSpeed=100ms, cycles=5
+	 * One cycle is 10 seconds: the first 5 seconds, numbers are being generated continuously (no sleep), and the next 5 seconds, 1 number/100ms
+	 * Five such cycles are executed, resulting in a total time of 50 seconds (5 cycles * 10s/cycle)
+	 */
+	private static class NumberSource implements SourceFunction<Long> {
 		private volatile boolean isRunning = true;
-		private int number = 0;
+		private long number = 0;
+		private long fastPeriodMs;
+		private long slowPeriodMs;
+		private long fastPeriodSpeed;
+		private long slowPeriodSpeed;
+		private int cycles;
+
+		public NumberSource(long fastPeriodMs, long slowPeriodMs, long fastPeriodSpeed, long slowPeriodSpeed, int cycles) {
+			this.fastPeriodMs = fastPeriodMs;
+			this.slowPeriodMs = slowPeriodMs;
+			this.fastPeriodSpeed = fastPeriodSpeed;
+			this.slowPeriodSpeed = slowPeriodSpeed;
+			this.cycles = cycles;
+		}
+
+		private List<Tuple2<Long, Long>> computeExecutionPeriods() {
+			if (cycles == -1) {
+				// When cycles = -1, no cycles (generate numbers ad infinitum)
+				return null;
+			}
+
+			List<Tuple2<Long, Long>> executionPeriods = new ArrayList<>();
+
+			long t0 = System.currentTimeMillis();
+
+			for (int i = 0; i < cycles; i++) {
+				long cycleBaseline = t0 + (fastPeriodMs + slowPeriodMs) * i;
+				executionPeriods.add(new Tuple2(cycleBaseline + fastPeriodMs, fastPeriodSpeed));
+				executionPeriods.add(new Tuple2(cycleBaseline + fastPeriodMs + slowPeriodMs, slowPeriodSpeed));
+			}
+
+			//			System.out.println("EXECUTION PLAN " + t0);
+			//			for (Tuple2<Long, Long> executionTime : executionPeriods) {
+			//				System.out.println(executionTime);
+			//			}
+
+			return executionPeriods;
+		}
 
 		@Override
-		public void run(SourceContext<Integer> ctx) throws Exception {
+		public void run(SourceContext<Long> ctx) throws Exception {
+			List<Tuple2<Long, Long>> executionPeriods = computeExecutionPeriods();
 
 			while (isRunning) {
-				if (number % 10000 == 0) {
-					//Print every 10,000th number (just so we can observe when numbers are being generated)
-					System.out.println("Generated " + number);
-				}
-
-				if (number > 3000000) cancel();
-
 				ctx.collect(number++);
-//				Thread.sleep(1L);
+				System.out.print("*");
+
+				//				//TEMP
+				//				if (number > 5000) {
+				//					isRunning = false;
+				//					System.out.println("testing upper bound reached, max number generated " + (number - 1));
+				//				}
+
+				if (executionPeriods == null) {
+					// cycles was set to -1. do nothing, no sleep, no speed variation, no stopping
+				} else if (executionPeriods.size() == 0) {
+					// No more periods remaining, stop number generation
+					System.out.println("Execution periods completed, number generation stopped. Last number generated: " + (number - 1));
+					isRunning = false;
+				} else {
+					Tuple2<Long, Long> currentPeriod = executionPeriods.get(0);
+					long currentTime = System.currentTimeMillis();
+
+					if (currentTime < currentPeriod.f0) {
+						// Check if current time is still within the current period (index 0), and sleep by the specified speed
+						if (currentPeriod.f1 > 0) {
+							Thread.sleep(currentPeriod.f1);
+						}
+					} else {
+						// Otherwise, move on to the next period by removing the current period (index 0)
+						synchronized (executionPeriods) {
+							System.out.println("Expired exec time " + currentTime + " " + executionPeriods.get(0));
+							executionPeriods.remove(0);
+						}
+					}
+				}
 			}
 		}
 
@@ -138,71 +162,4 @@ public class DeadlockingIterateExample {
 			isRunning = false;
 		}
 	}
-
-	private static class NumberInputMap implements MapFunction<String, Integer> {
-		private static final long serialVersionUID = 1L;
-
-		@Override
-		public Integer map(String value) throws Exception {
-			return Integer.parseInt(value);
-		}
-	}
-
-	public static class InputMap implements MapFunction<Integer, Integer> {
-		private static final long serialVersionUID = 1L;
-
-		@Override
-		public Integer map(Integer value) throws Exception {
-//			System.out.println("Input " + value);
-			return value;
-		}
-	}
-
-	public static class Step implements MapFunction<Integer, Integer> {
-		private static final long serialVersionUID = 1L;
-
-		@Override
-		public Integer map(Integer value) throws Exception {
-//			System.out.println("Step: " + value + " to " + value);
-			int remainder = value % 10000;
-			if(remainder > 2000) remainder = 2000;
-			return (value - remainder);
-		}
-	}
-
-	/**
-	 * OutputSelector testing which tuple needs to be iterated again.
-	 */
-	public static class MySelector implements OutputSelector<Integer> {
-		private static final long serialVersionUID = 1L;
-
-		@Override
-		public Iterable<String> select(Integer value) {
-			List<String> output = new ArrayList<>();
-
-			// Send every 1000th number to the output (just so we can observe if the iteration is still running)
-			if (value % 10000 != 0) {
-//				System.out.println("Selector " + value + " sending to iterate");
-				output.add("iterate");
-			} else {
-//				System.out.println("Selector " + value + " sending to output");
-				output.add("output");
-			}
-			return output;
-		}
-	}
-
-	/**
-	 * Giving back the input pair and the counter.
-	 */
-	public static class OutputMap implements MapFunction<Integer, Integer> {
-		private static final long serialVersionUID = 1L;
-
-		@Override
-		public Integer map(Integer value) throws Exception {
-//			System.out.println("Output: " + value);
-			return value;
-		}
-	}
-
 }
