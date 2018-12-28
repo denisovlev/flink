@@ -121,6 +121,7 @@ public class SpillableQueue<E> {
 //					System.out.println("Reading from spill: " + buf.getRecords().size() + " records");
 					System.out.println("Number of spilled buffers:" + spilled.size());
 					head.addAll(buf.getRecords());
+					buf.delete();
 				}
 				if (spilled.isEmpty() && !tail.isEmpty()) {
 					System.out.println("Transfer");
@@ -224,5 +225,12 @@ class SpilledBuffer<E> {
 
 	ArrayList<E> getRecords() {
 		return records;
+	}
+
+	void delete() throws IOException {
+		out.close();
+		in.close();
+		records.clear();
+		tempFile.delete();
 	}
 }

@@ -77,7 +77,7 @@ public class DeadlockingIterateExample {
 		}
 
 		// create an iterative data stream from the input with 5 second timeout
-		IterativeStream<Integer> it = inputStream.map(new InputMap()).iterate();
+		IterativeStream<Integer> it = inputStream.map(new InputMap()).iterate(5000);
 
 		// apply the step function to get the next Fibonacci number
 		// increment the counter and split the output with the output selector
@@ -126,6 +126,8 @@ public class DeadlockingIterateExample {
 					System.out.println("Generated " + number);
 				}
 
+				if (number > 3000000) cancel();
+
 				ctx.collect(number++);
 //				Thread.sleep(1L);
 			}
@@ -162,7 +164,9 @@ public class DeadlockingIterateExample {
 		@Override
 		public Integer map(Integer value) throws Exception {
 //			System.out.println("Step: " + value + " to " + value);
-			return value;
+			int remainder = value % 10000;
+			if(remainder > 2000) remainder = 2000;
+			return (value - remainder);
 		}
 	}
 
@@ -177,7 +181,7 @@ public class DeadlockingIterateExample {
 			List<String> output = new ArrayList<>();
 
 			// Send every 1000th number to the output (just so we can observe if the iteration is still running)
-			if (value % 1000 != 0) {
+			if (value % 10000 != 0) {
 //				System.out.println("Selector " + value + " sending to iterate");
 				output.add("iterate");
 			} else {
