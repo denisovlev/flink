@@ -1,7 +1,7 @@
 package org.apache.flink.streaming.examples.iteration;
 
 import org.apache.flink.api.java.tuple.Tuple2;
-import org.apache.flink.api.java.tuple.Tuple3;
+import org.apache.flink.api.java.tuple.Tuple4;
 import org.apache.flink.streaming.api.collector.selector.OutputSelector;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.IterativeStream;
@@ -44,14 +44,14 @@ public class DeadlockingIterateExample {
 
 		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment().setBufferTimeout(1);
 
-		DataStream<Tuple3<Long, Long, Long>> inputStream = env.addSource(
+		DataStream<Tuple4<Long, Long, Long, Long>> inputStream = env.addSource(
 			new NumberSource(fastPeriodMs, slowPeriodMs, fastPeriodSpeed, slowPeriodSpeed, cycles));
 
-		IterativeStream<Tuple3<Long, Long, Long>> iteration = inputStream.map(DeadlockingIterateExample::noOpMap).iterate();
-		DataStream<Tuple3<Long, Long, Long>> iterationBody = iteration.map(DeadlockingIterateExample::incrementIterations);
+		IterativeStream<Tuple4<Long, Long, Long, Long>> iteration = inputStream.map(DeadlockingIterateExample::noOpMap).iterate();
+		DataStream<Tuple4<Long, Long, Long, Long>> iterationBody = iteration.map(DeadlockingIterateExample::incrementIterations);
 
 		int finalPctSendToOutput = pctSendToOutput;
-		SplitStream<Tuple3<Long, Long, Long>> splitStream = iterationBody.split((OutputSelector<Tuple3<Long, Long, Long>>) value -> {
+		SplitStream<Tuple4<Long, Long, Long, Long>> splitStream = iterationBody.split((OutputSelector<Tuple4<Long, Long, Long, Long>>) value -> {
 			List<String> output = new ArrayList<>();
 			// Send some numbers to output (set in pctSendToOutput), the rest back to the iteration
 			if (random.nextInt(100) < finalPctSendToOutput) {
@@ -66,29 +66,42 @@ public class DeadlockingIterateExample {
 		iteration.closeWith(splitStream.select("iterate"));
 
 		// Send 'output' to output
-		DataStream<Tuple3<Long, Long, Long>> output = splitStream.select("output").map(DeadlockingIterateExample::logDuration);
+		DataStream<Tuple4<Long, Long, Long, Long>> output = splitStream.select("output").map(DeadlockingIterateExample::logDuration);
 
 		output.print();
 
 		env.execute("Deadlocking Iteration Example");
 	}
 
-	private static Tuple3<Long, Long, Long> noOpMap(Tuple3<Long, Long, Long> value) {
+	private static Tuple4<Long, Long, Long, Long> noOpMap(Tuple4<Long, Long, Long, Long> value) {
 		return value;
 	}
 
-	private static Tuple3<Long, Long, Long> logDuration(Tuple3<Long, Long, Long> value) {
+	private static Tuple4<Long, Long, Long, Long> logDuration(Tuple4<Long, Long, Long, Long> value) {
 
 		if (LOG.isDebugEnabled()) {
-			long totalTime = System.currentTimeMillis() - value.f1;
+			long now = System.currentTimeMillis();
+			long totalTimeFromSource = now - value.f1;
+			long totalTimeFromLoopEntry = now - value.f3;
 
-			//print the number, number of iterations, total time, time/iteration. time in milliseconds
-			LOG.debug("{},{},{},{}", value.f0, value.f2, totalTime, totalTime / value.f2);
+			LOG.debug("{},{},{},{},{},{},{}",
+				value.f0,                           // the number
+				value.f2,                           // number of iterations
+				value.f1,                           // number generation timestamp
+				value.f3,                           // loop entry timestamp
+				now,                                // loop exit timestamp
+				totalTimeFromSource / value.f2,     // duration/iteration (from source)
+				totalTimeFromLoopEntry / value.f2   // duration/iteration (from loop entry)
+			);
 		}
 		return value;
 	}
 
-	private static Tuple3<Long, Long, Long> incrementIterations(Tuple3<Long, Long, Long> value) {
+	private static Tuple4<Long, Long, Long, Long> incrementIterations(Tuple4<Long, Long, Long, Long> value) {
+		if (value.f3 == -1l) {
+			value.f3 = System.currentTimeMillis();
+		}
+
 		value.f2 += 1;
 		return value;
 	}
@@ -106,12 +119,13 @@ public class DeadlockingIterateExample {
 	 * One cycle is 10 seconds: the first 5 seconds, numbers are being generated continuously (no sleep), and the next 5 seconds, 1 number/100ms
 	 * Five such cycles are executed, resulting in a total time of 50 seconds (5 cycles * 10s/cycle)
 	 *
-	 * The data type is a Tuple3 which is used as follows:
+	 * The data type is a Tuple4 which is used as follows:
 	 * f0 - the generated number
 	 * f1 - timestamp of generation
 	 * f2 - number of iterations (initialized to 0, incremented each pass through the iteration body)
+	 * f3 - timestamp of first loop entry
 	 */
-	private class NumberSource implements SourceFunction<Tuple3<Long, Long, Long>> {
+	private class NumberSource implements SourceFunction<Tuple4<Long, Long, Long, Long>> {
 		private volatile boolean isRunning = true;
 		private long number = 0;
 		private long fastPeriodMs;
@@ -153,18 +167,12 @@ public class DeadlockingIterateExample {
 		}
 
 		@Override
-		public void run(SourceContext<Tuple3<Long, Long, Long>> ctx) throws Exception {
+		public void run(SourceContext<Tuple4<Long, Long, Long, Long>> ctx) throws Exception {
 			List<Tuple2<Long, Long>> executionPeriods = computeExecutionPeriods();
 
 			while (isRunning) {
-				ctx.collect(new Tuple3(number++, System.currentTimeMillis(), 0l));
+				ctx.collect(new Tuple4(number++, System.currentTimeMillis(), 0l, -1l));
 				System.out.print("*");
-
-				//				//TEMP
-				//				if (number > 5000) {
-				//					isRunning = false;
-				//					System.out.println("testing upper bound reached, max number generated " + (number - 1));
-				//				}
 
 				if (executionPeriods == null) {
 					// cycles was set to -1. do nothing, no sleep, no speed variation, no stopping
