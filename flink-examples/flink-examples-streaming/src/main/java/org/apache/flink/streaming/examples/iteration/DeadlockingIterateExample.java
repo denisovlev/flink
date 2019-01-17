@@ -30,6 +30,7 @@ public class DeadlockingIterateExample {
 		long slowPeriodSpeed = 100;
 		int cycles = 5;
 		int pctSendToOutput = 1;
+		int fixedIterations = 0;
 
 		if (args.length >= 6) {
 			fastPeriodMs = Long.parseLong(args[0]);
@@ -38,9 +39,8 @@ public class DeadlockingIterateExample {
 			slowPeriodSpeed = Long.parseLong(args[3]);
 			cycles = Integer.parseInt(args[4]);
 			pctSendToOutput = Integer.parseInt(args[5]);
+			fixedIterations = Integer.parseInt(args[6]);
 		}
-
-		Random random = new Random();
 
 		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment().setBufferTimeout(1);
 
@@ -50,17 +50,33 @@ public class DeadlockingIterateExample {
 		IterativeStream<Tuple4<Long, Long, Long, Long>> iteration = inputStream.map(DeadlockingIterateExample::noOpMap).iterate();
 		DataStream<Tuple4<Long, Long, Long, Long>> iterationBody = iteration.map(DeadlockingIterateExample::incrementIterations);
 
-		int finalPctSendToOutput = pctSendToOutput;
-		SplitStream<Tuple4<Long, Long, Long, Long>> splitStream = iterationBody.split((OutputSelector<Tuple4<Long, Long, Long, Long>>) value -> {
-			List<String> output = new ArrayList<>();
-			// Send some numbers to output (set in pctSendToOutput), the rest back to the iteration
-			if (random.nextInt(100) < finalPctSendToOutput) {
-				output.add("output");
-			} else {
-				output.add("iterate");
-			}
-			return output;
-		});
+		SplitStream<Tuple4<Long, Long, Long, Long>> splitStream;
+		if (fixedIterations > 0) {
+			int finalFixedIterations = fixedIterations;
+			splitStream = iterationBody.split((OutputSelector<Tuple4<Long, Long, Long, Long>>) value -> {
+				List<String> output = new ArrayList<>();
+				// Send number to output if it already reached fixed number of iterations
+				if (value.f2 >= finalFixedIterations) {
+					output.add("output");
+				} else {
+					output.add("iterate");
+				}
+				return output;
+			});
+		} else {
+			Random random = new Random();
+			int finalPctSendToOutput = pctSendToOutput;
+			splitStream = iterationBody.split((OutputSelector<Tuple4<Long, Long, Long, Long>>) value -> {
+				List<String> output = new ArrayList<>();
+				// Send some numbers to output (set in pctSendToOutput), the rest back to the iteration
+				if (random.nextInt(100) < finalPctSendToOutput) {
+					output.add("output");
+				} else {
+					output.add("iterate");
+				}
+				return output;
+			});
+		}
 
 		// Send 'iterate' back to the feedback loop
 		iteration.closeWith(splitStream.select("iterate"));
