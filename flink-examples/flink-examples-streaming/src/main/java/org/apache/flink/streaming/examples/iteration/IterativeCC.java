@@ -88,7 +88,7 @@ public class IterativeCC implements ProgramDescription {
 //		env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
 		DataStream<Tuple4<Long, Long, Long, Long>> edges = getEdgesDataSet(env);
 //        edges.keyBy(0).window(TumblingProcessingTimeWindows.of(Time.milliseconds(1))).max(0).print();
-		IterativeStream<Tuple4<Long, Long, Long, Long>> iteration = edges.iterate();
+		IterativeStream<Tuple4<Long, Long, Long, Long>> iteration = edges.iterate(5000);
 
 		SplitStream<Tuple4<Long, Long, Long, Long>> something =
 			iteration
@@ -122,7 +122,7 @@ public class IterativeCC implements ProgramDescription {
 			}
 		);
 
-		result.print();
+		output.print();
 
 //		edges.assignTimestampsAndWatermarks(new AscendingTimestampExtractor<Tuple4<Long, Long, Long, Long>>() {
 //
@@ -149,7 +149,7 @@ public class IterativeCC implements ProgramDescription {
 		@Override
 		public Iterable<String> select(Tuple4<Long, Long, Long, Long> value) {
 			List<String> output = new ArrayList<>();
-			if(value.f0 == 0 && value.f1 == 0 && value.f2 == 0 && value.f3 == 0) {
+			if(value.f2 == 0 ) {
 				output.add("output");
 			}
 			else{
@@ -166,7 +166,7 @@ public class IterativeCC implements ProgramDescription {
         public void process(Long key, Context context, Iterable<Tuple4<Long, Long, Long, Long>> input, Collector<Tuple4<Long, Long, Long, Long>> out) {
             System.out.println("KEY: " + key);
         	HashSet<Long> allVertices = new HashSet<>();
-
+			HashMap<Long, HashSet<Long>> current = (HashMap<Long, HashSet<Long>>)hashMap.clone();
 			for(Tuple4<Long, Long, Long, Long> in: input) {
 				allVertices.add(in.f0);
 				allVertices.add(in.f1);
@@ -199,12 +199,19 @@ public class IterativeCC implements ProgramDescription {
 
 			hashMap.put(newKey, allVertices);
 
-
-			for(Long in: allVertices){
-//				if(newKey != in)
-					out.collect(new Tuple4<>(newKey, in, 1L, newKey));
+			if(current.equals(hashMap)){
+				for (Long in : allVertices) {
+					//				if(newKey != in)
+					out.collect(new Tuple4<>(newKey, in, 0L, newKey));
+				}
 			}
-			out.collect(new Tuple4<>(0L, 0L, 0L, 0L));
+			else {
+				for (Long in : allVertices) {
+					//				if(newKey != in)
+					out.collect(new Tuple4<>(newKey, in, 1L, newKey));
+				}
+			}
+//			out.collect(new Tuple4<>(0L, 0L, 0L, 0L));
 
         }
     }
