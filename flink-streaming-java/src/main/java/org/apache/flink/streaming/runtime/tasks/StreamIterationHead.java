@@ -20,20 +20,24 @@ package org.apache.flink.streaming.runtime.tasks;
 import org.apache.flink.annotation.Internal;
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
-import org.apache.flink.core.memory.DataInputView;
-import org.apache.flink.core.memory.DataOutputView;
+import org.apache.flink.runtime.checkpoint.CheckpointMetaData;
+import org.apache.flink.runtime.checkpoint.CheckpointMetrics;
+import org.apache.flink.runtime.checkpoint.CheckpointOptions;
 import org.apache.flink.runtime.execution.Environment;
+import org.apache.flink.runtime.io.network.api.CheckpointBarrier;
+import org.apache.flink.runtime.plugable.SerializationDelegate;
 import org.apache.flink.streaming.api.graph.StreamConfig;
 import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.runtime.io.BlockingQueueBroker;
 import org.apache.flink.streaming.runtime.io.RecordWriterOutput;
+import org.apache.flink.streaming.runtime.io.StreamRecordWriter;
 import org.apache.flink.streaming.runtime.streamrecord.StreamElementSerializer;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
-
+import org.apache.flink.types.Either;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
@@ -47,6 +51,10 @@ public class StreamIterationHead<OUT> extends OneInputStreamTask<OUT, OUT> {
 	private static final Logger LOG = LoggerFactory.getLogger(StreamIterationHead.class);
 
 	private volatile boolean running = true;
+
+	private UpstreamLogger<OUT> upstreamLogger;
+
+	private Object lock;
 
 	public StreamIterationHead(Environment env) {
 		super(env);
@@ -78,10 +86,9 @@ public class StreamIterationHead<OUT> extends OneInputStreamTask<OUT, OUT> {
 		final long iterationWaitTime = getConfiguration().getIterationWaitTime();
 		final boolean shouldWait = iterationWaitTime > 0;
 
-//		final BlockingQueue<StreamRecord<OUT>> dataChannel = new ArrayBlockingQueue<StreamRecord<OUT>>(1);
 		StreamElementSerializer<OUT> streamElementSerializer = createRecordSerializer();
-		SpillRecordSerializer<OUT> serializer = new SpillRecordSerializer<OUT>(streamElementSerializer);
-		SpillableQueue<StreamRecord<OUT>> dataChannel = new SpillableQueue<>(1024 * 8, serializer);
+		StreamElementOrEventSerializer<OUT> serializer = new StreamElementOrEventSerializer<OUT>(streamElementSerializer);
+		SpillableQueue<Either<StreamRecord<OUT>, CheckpointBarrier>> dataChannel = new SpillableQueue<>(1024 * 8, serializer);
 
 		// offer the queue for the tail
 		BlockingQueueBroker.INSTANCE.handIn(brokerID, dataChannel);
@@ -99,45 +106,55 @@ public class StreamIterationHead<OUT> extends OneInputStreamTask<OUT, OUT> {
 				}
 			}
 
+			synchronized (lock) {
+				//emit in-flight events in the upstream log upon recovery
+				for (StreamRecord<OUT> rec : upstreamLogger.getReplayLog()) {
+					for (RecordWriterOutput<OUT> output : outputs) {
+						output.collect(rec);
+					}
+				}
+				upstreamLogger.clearLog();
+			}
+
+
 			while (running) {
-				StreamRecord<OUT> nextRecord = shouldWait ?
+
+				Either<StreamRecord<OUT>, CheckpointBarrier> nextRecord = shouldWait ?
 					dataChannel.poll(iterationWaitTime, TimeUnit.MILLISECONDS) :
 					dataChannel.take();
 
-				if (nextRecord != null) {
-					for (RecordWriterOutput<OUT> output : outputs) {
-						output.collect(nextRecord);
+				synchronized (lock) {
+					if (nextRecord != null) {
+						if (nextRecord.isLeft()) {
+							//log in-transit records whose effects are not part of ongoing snapshots
+							upstreamLogger.logRecord(nextRecord.left());
+
+							for (RecordWriterOutput<OUT> output : outputs) {
+								output.collect(nextRecord.left());
+							}
+						} else {
+							//upon marker from tail (markers should loop back in FIFO order)
+							checkpointState(new CheckpointMetaData(
+								nextRecord.right().getId(), 
+								nextRecord.right().getTimestamp()),
+								nextRecord.right().getCheckpointOptions(),
+								new CheckpointMetrics()
+							);
+							upstreamLogger.discardSlice();
+						}
+					}
+					else {
+						// done
+						break;
 					}
 				}
-				else {
-					// done
-					break;
-				}
+
 			}
 		}
 		finally {
 			// make sure that we remove the queue from the broker, to prevent a resource leak
 			BlockingQueueBroker.INSTANCE.remove(brokerID);
 			LOG.info("Iteration head {} removed feedback queue under {}", getName(), brokerID);
-		}
-	}
-
-	private static class SpillRecordSerializer<IN> implements ItemSerializer<StreamRecord<IN>>{
-
-		private StreamElementSerializer<IN> serializer;
-
-		SpillRecordSerializer(StreamElementSerializer<IN> serializer) {
-			this.serializer = serializer;
-		}
-
-		@Override
-		public void serialize(StreamRecord<IN> value, DataOutputView target) throws IOException {
-			serializer.serialize(value, target);
-		}
-
-		@Override
-		public StreamRecord<IN> deserialize(DataInputView source) throws IOException {
-			return (StreamRecord<IN>) serializer.deserialize(source);
 		}
 	}
 
@@ -150,12 +167,29 @@ public class StreamIterationHead<OUT> extends OneInputStreamTask<OUT, OUT> {
 
 	@Override
 	public void init() {
-		// does not hold any resources, no initialization necessary
+		this.lock = getCheckpointLock();
+		getConfiguration().setStreamOperator(new UpstreamLogger(getConfiguration(), createRecordSerializer()));
+		List<StreamRecordWriter<SerializationDelegate<StreamRecord<OUT>>>> streamRecordWriters =
+			StreamTask.createStreamRecordWriters(configuration, getEnvironment());
+		operatorChain = new OperatorChain<>(this, streamRecordWriters);
+		this.upstreamLogger = (UpstreamLogger<OUT>) operatorChain.getHeadOperator();
 	}
 
 	@Override
 	protected void cleanup() throws Exception {
 		// does not hold any resources, no cleanup necessary
+	}
+
+	@Override
+	public boolean triggerCheckpoint(CheckpointMetaData checkpointMetaData, CheckpointOptions checkpointOptions) throws Exception {
+
+		//create a buffer for logging the initiated snapshot and broadcast a barrier for it
+		synchronized (getCheckpointLock()) {
+			upstreamLogger.createSlice(String.valueOf(checkpointMetaData.getCheckpointId()));
+			operatorChain.broadcastCheckpointBarrier(checkpointMetaData.getCheckpointId(), checkpointMetaData.getTimestamp(), checkpointOptions);
+		}
+
+		return true;
 	}
 
 	// ------------------------------------------------------------------------

@@ -162,9 +162,9 @@ class BackDrainableQueue<E> extends ArrayBlockingQueue<E>{
 }
 
 interface ItemSerializer<E> {
-	public void serialize(E value, DataOutputView target) throws IOException;
+	public void serialize(E value, DataOutputViewStreamWrapper target) throws IOException;
 
-	public E deserialize(DataInputView source) throws IOException;
+	public E deserialize(DataInputViewStreamWrapper source) throws IOException;
 }
 
 class WrapSerializer implements ItemSerializer<Integer> {
@@ -176,12 +176,12 @@ class WrapSerializer implements ItemSerializer<Integer> {
 	}
 
 	@Override
-	public void serialize(Integer value, DataOutputView target) throws IOException {
+	public void serialize(Integer value, DataOutputViewStreamWrapper target) throws IOException {
 		ser.serialize(value, target);
 	}
 
 	@Override
-	public Integer deserialize(DataInputView source) throws IOException {
+	public Integer deserialize(DataInputViewStreamWrapper source) throws IOException {
 		return ser.deserialize(source);
 	}
 }

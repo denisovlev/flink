@@ -1,7 +1,9 @@
 package org.apache.flink.streaming.examples.iteration;
 
+import org.apache.flink.api.common.functions.FilterFunction;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.api.java.tuple.Tuple4;
+import org.apache.flink.runtime.state.filesystem.FsStateBackend;
 import org.apache.flink.streaming.api.collector.selector.OutputSelector;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.IterativeStream;
@@ -43,6 +45,8 @@ public class DeadlockingIterateExample {
 		}
 
 		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment().setBufferTimeout(1);
+		env.getCheckpointConfig().setCheckpointInterval(5000);
+		env.setStateBackend(new FsStateBackend("file:///stateFile/", false));
 
 		DataStream<Tuple4<Long, Long, Long, Long>> inputStream = env.addSource(
 			new NumberSource(fastPeriodMs, slowPeriodMs, fastPeriodSpeed, slowPeriodSpeed, cycles));
@@ -84,12 +88,20 @@ public class DeadlockingIterateExample {
 		// Send 'output' to output
 		DataStream<Tuple4<Long, Long, Long, Long>> output = splitStream.select("output").map(DeadlockingIterateExample::logDuration);
 
-		output.print();
+		output.filter((new FilterFunction<Tuple4<Long, Long, Long, Long>>() {
+			@Override
+			public boolean filter(Tuple4<Long, Long, Long, Long> value) throws Exception {
+				return value.f0 < 0;
+			}
+		})).print();
 
 		env.execute("Deadlocking Iteration Example");
 	}
 
 	private static Tuple4<Long, Long, Long, Long> noOpMap(Tuple4<Long, Long, Long, Long> value) {
+		Random random = new Random();
+		// fail job randomly
+		if (random.nextInt(4000000) <= 1) throw new RuntimeException("test test test");
 		return value;
 	}
 
@@ -100,15 +112,15 @@ public class DeadlockingIterateExample {
 			long totalTimeFromSource = now - value.f1;
 			long totalTimeFromLoopEntry = now - value.f3;
 
-			LOG.debug("{},{},{},{},{},{},{}",
-				value.f0,                           // the number
-				value.f2,                           // number of iterations
-				value.f1,                           // number generation timestamp
-				value.f3,                           // loop entry timestamp
-				now,                                // loop exit timestamp
-				totalTimeFromSource / value.f2,     // duration/iteration (from source)
-				totalTimeFromLoopEntry / value.f2   // duration/iteration (from loop entry)
-			);
+//			LOG.debug("{},{},{},{},{},{},{}",
+//				value.f0,                           // the number
+//				value.f2,                           // number of iterations
+//				value.f1,                           // number generation timestamp
+//				value.f3,                           // loop entry timestamp
+//				now,                                // loop exit timestamp
+//				totalTimeFromSource / value.f2,     // duration/iteration (from source)
+//				totalTimeFromLoopEntry / value.f2   // duration/iteration (from loop entry)
+//			);
 		}
 		return value;
 	}
@@ -188,7 +200,7 @@ public class DeadlockingIterateExample {
 
 			while (isRunning) {
 				ctx.collect(new Tuple4(number++, System.currentTimeMillis(), 0l, -1l));
-				System.out.print("*");
+//				System.out.print("*");
 
 				if (executionPeriods == null) {
 					// cycles was set to -1. do nothing, no sleep, no speed variation, no stopping

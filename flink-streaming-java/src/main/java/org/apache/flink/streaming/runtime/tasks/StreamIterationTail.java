@@ -18,7 +18,11 @@
 package org.apache.flink.streaming.runtime.tasks;
 
 import org.apache.flink.annotation.Internal;
+import org.apache.flink.runtime.checkpoint.CheckpointMetaData;
+import org.apache.flink.runtime.checkpoint.CheckpointMetrics;
+import org.apache.flink.runtime.checkpoint.CheckpointOptions;
 import org.apache.flink.runtime.execution.Environment;
+import org.apache.flink.runtime.io.network.api.CheckpointBarrier;
 import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
 import org.apache.flink.streaming.api.operators.Output;
@@ -26,6 +30,7 @@ import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.runtime.io.BlockingQueueBroker;
 import org.apache.flink.streaming.runtime.streamrecord.LatencyMarker;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
+import org.apache.flink.types.Either;
 import org.apache.flink.util.OutputTag;
 
 import org.slf4j.Logger;
@@ -42,6 +47,8 @@ import java.util.concurrent.TimeUnit;
 public class StreamIterationTail<IN> extends OneInputStreamTask<IN, IN> {
 
 	private static final Logger LOG = LoggerFactory.getLogger(StreamIterationTail.class);
+	private @SuppressWarnings("unchecked")
+	SpillableQueue<Either<StreamRecord<IN>, CheckpointBarrier>> dataChannel;
 
 	public StreamIterationTail(Environment environment) {
 		super(environment);
@@ -62,9 +69,7 @@ public class StreamIterationTail<IN> extends OneInputStreamTask<IN, IN> {
 
 		LOG.info("Iteration tail {} trying to acquire feedback queue under {}", getName(), brokerID);
 
-		@SuppressWarnings("unchecked")
-		SpillableQueue<StreamRecord<IN>> dataChannel =
-				(SpillableQueue<StreamRecord<IN>>) BlockingQueueBroker.INSTANCE.get(brokerID);
+		dataChannel = (SpillableQueue<Either<StreamRecord<IN>, CheckpointBarrier>>) BlockingQueueBroker.INSTANCE.get(brokerID);
 
 		LOG.info("Iteration tail {} acquired feedback queue {}", getName(), brokerID);
 
@@ -73,6 +78,29 @@ public class StreamIterationTail<IN> extends OneInputStreamTask<IN, IN> {
 
 		// call super.init() last because that needs this.headOperator to be set up
 		super.init();
+	}
+
+	@Override
+	protected boolean performCheckpoint(
+		CheckpointMetaData checkpointMetaData,
+		CheckpointOptions checkpointOptions,
+		CheckpointMetrics checkpointMetrics) throws Exception {
+		LOG.debug("Starting checkpoint {} on task {}", checkpointMetaData.getCheckpointId(), getName());
+
+		synchronized (getCheckpointLock()) {
+			if (isRunning()) {
+				dataChannel.put(new Either.Right(
+					new CheckpointBarrier(checkpointMetaData.getCheckpointId(),
+						checkpointMetaData.getTimestamp(),
+						checkpointOptions)
+				));
+				getEnvironment().acknowledgeCheckpoint(checkpointMetaData.getCheckpointId(), checkpointMetrics);
+				return true;
+			}
+			else {
+				return super.performCheckpoint(checkpointMetaData, checkpointOptions, checkpointMetrics);
+			}
+		}
 	}
 
 	private static class RecordPusher<IN> extends AbstractStreamOperator<IN> implements OneInputStreamOperator<IN, IN> {
@@ -98,13 +126,13 @@ public class StreamIterationTail<IN> extends OneInputStreamTask<IN, IN> {
 	private static class IterationTailOutput<IN> implements Output<StreamRecord<IN>> {
 
 		@SuppressWarnings("NonSerializableFieldInSerializableClass")
-		private final SpillableQueue<StreamRecord<IN>> dataChannel;
+		private final SpillableQueue<Either<StreamRecord<IN>, CheckpointBarrier>> dataChannel;
 
 		private final long iterationWaitTime;
 
 		private final boolean shouldWait;
 
-		IterationTailOutput(SpillableQueue<StreamRecord<IN>> dataChannel, long iterationWaitTime) {
+		IterationTailOutput(SpillableQueue<Either<StreamRecord<IN>, CheckpointBarrier>> dataChannel, long iterationWaitTime) {
 			this.dataChannel = dataChannel;
 			this.iterationWaitTime = iterationWaitTime;
 			this.shouldWait =  iterationWaitTime > 0;
@@ -122,10 +150,10 @@ public class StreamIterationTail<IN> extends OneInputStreamTask<IN, IN> {
 		public void collect(StreamRecord<IN> record) {
 			try {
 				if (shouldWait) {
-					dataChannel.offer(record, iterationWaitTime, TimeUnit.MILLISECONDS);
+					dataChannel.offer(Either.Left(record), iterationWaitTime, TimeUnit.MILLISECONDS);
 				}
 				else {
-					dataChannel.put(record);
+					dataChannel.put(Either.Left(record));
 				}
 			} catch (InterruptedException | IOException e) {
 				throw new RuntimeException(e);
