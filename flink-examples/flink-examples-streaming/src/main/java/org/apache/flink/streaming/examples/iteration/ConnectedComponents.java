@@ -24,67 +24,144 @@ import org.apache.flink.table.api.TableEnvironment;
 import org.apache.flink.util.Collector;
 
 import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.List;
 
 public class ConnectedComponents {
+	private static final int WINDOW_SIZE = 1;
 	public static void main(String args[]) throws Exception{
 		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment()
-			.setBufferTimeout(1).setParallelism(1);
+			.setParallelism(1);
+		env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
 		StreamTableEnvironment tableEnv = TableEnvironment.getTableEnvironment(env);
 
 		// edges reference [ (1,2), (2,1), (2,3), (3,2) ...]
-		DataStream<Tuple2<Long, Long>> inputEdge = env.addSource(new EdgeSource()).flatMap(new UndirectEdge());
-
+		DataStream<Tuple2<Long, Long>> initEdge = env.addSource(new EdgeSource());
+		DataStream<Tuple2<Long, Long>> inputEdge =
+			initEdge
+				.flatMap(new UndirectEdge())
+				.assignTimestampsAndWatermarks(new AscendingTimestampExtractor<Tuple2<Long, Long>>() {
+					@Override
+					public long extractAscendingTimestamp(Tuple2<Long, Long> record) {
+						return new Timestamp(System.currentTimeMillis()+1000).getTime();
+					}
+				});
+//		inputEdge.print();
 		// initial vertices values: pair for id with 0 iteration [(1,1,0), (2,2,0), ..]
-		DataStream<Tuple3<Long, Long, Long>> verticesWithInitialId = inputEdge.map(new ExtractVertices<>());
-
-		// define iteration
-		IterativeStream<Tuple3<Long,Long, Long>> it = verticesWithInitialId.iterate(1000);
-
-		// ----- Iteration start
-		DataStream<Tuple3<Long, Long,Long>> changes =
-			it
-				// assign timestamp
+		DataStream<Tuple3<Long, Long, Long>> verticesWithInitialId = initEdge.map(new ExtractVertices<>());
+//		verticesWithInitialId.print();
+		// first step
+		DataStream<Tuple4<Long, Long, Long, Boolean>> joinedResult =
+			verticesWithInitialId
 				.assignTimestampsAndWatermarks(new AscendingTimestampExtractor<Tuple3<Long, Long, Long>>() {
-
 					@Override
 					public long extractAscendingTimestamp(Tuple3<Long, Long, Long> record) {
-						return new Timestamp(System.currentTimeMillis()).getTime();
+						return new Timestamp(System.currentTimeMillis()+1000).getTime();
 					}
 				})
-				// join current result with edges list
-				.join(inputEdge).where(new KeySelector<Tuple3<Long, Long, Long>, Long>() {
-				@Override
-				public Long getKey(Tuple3<Long, Long, Long> value) throws Exception {
-					return value.f0;
-				}
-			})
-				// join
-				.equalTo(new KeySelector<Tuple2<Long, Long>, Long>() {
+				.join(inputEdge)
+				.where(new KeySelector<Tuple3<Long,Long,Long>, Long>() {
+					@Override
+					public Long getKey(Tuple3<Long, Long, Long> value) throws Exception {
+						return value.f1;
+					}
+				}).equalTo(new KeySelector<Tuple2<Long, Long>, Long>() {
 					@Override
 					public Long getKey(Tuple2<Long, Long> value) throws Exception {
 						return value.f0;
 					}
 				})
-				// windowing by tumbling window (?)
-				.window(TumblingProcessingTimeWindows.of(Time.seconds(1)))
+				.window(TumblingEventTimeWindows.of(Time.seconds(WINDOW_SIZE)))
+				.apply(new JoinFunction<Tuple3<Long, Long, Long>, Tuple2<Long, Long>, Tuple4<Long, Long, Long, Boolean>>() {
+				@Override
+				public Tuple4<Long, Long, Long, Boolean> join(Tuple3<Long, Long, Long> first, Tuple2<Long, Long> second) throws Exception {
 
-				// apply function pf the join
-				.apply(
-					new JoinFunction<Tuple3<Long, Long, Long>, Tuple2<Long, Long>, Tuple3<Long, Long, Long>>() {
-						@Override
-						public Tuple3<Long, Long, Long> join(Tuple3<Long, Long, Long> first, Tuple2<Long, Long> second) throws Exception {
-							return new Tuple3<>(first.f0, second.f1, first.f2 + 1);
-						}
+					Tuple4<Long, Long, Long, Boolean> tuple4 = new Tuple4<>(first.f0, Math.min(first.f1, second.f1), second.f1, (first.f1 > second.f1));
+					System.out.println(tuple4);
+					return tuple4;
+				}
+				})
+				.assignTimestampsAndWatermarks(new AscendingTimestampExtractor<Tuple4<Long, Long, Long, Boolean>>() {
+
+					@Override
+					public long extractAscendingTimestamp(Tuple4<Long, Long, Long, Boolean> record) {
+						return new Timestamp(System.currentTimeMillis()+1000).getTime();
 					}
-				)
-				.keyBy(0) // key by vertices id
-				.minBy(1); // minimum by the second element, e.g result of join
+				});
+
+		// define iteration
+		IterativeStream<Tuple4<Long,Long, Long, Boolean>> it = joinedResult.iterate();
+
+		// ----- Iteration start
+		DataStream<Tuple2<Long, Long>> stream1 =
+			it.map(new MapFunction<Tuple4<Long, Long, Long, Boolean>, Tuple2<Long, Long>>() {
+				@Override
+				public Tuple2<Long, Long> map(Tuple4<Long, Long, Long, Boolean> value) throws Exception {
+					return new Tuple2<>(value.f0, value.f1);
+				}
+			})
+			.keyBy(0)
+			.minBy(1);
+
+		DataStream<Tuple2<Long, Long>> stream2 =
+			it.flatMap(new FlatMapFunction<Tuple4<Long, Long, Long, Boolean>, Tuple2<Long, Long>>() {
+				@Override
+				public void flatMap(Tuple4<Long, Long, Long, Boolean> value, Collector<Tuple2<Long, Long>> out) throws Exception {
+					out.collect(new Tuple2<>(value.f0, value.f2));
+//					out.collect(new Tuple2<>(value.f2, value.f1));
+				}
+			});
+
+		DataStream<Tuple4<Long, Long, Long, Boolean>> loop = stream1
+			.join(stream2)
+			.where(new KeySelector<Tuple2<Long,Long>, Long>() {
+				@Override
+				public Long getKey(Tuple2<Long, Long> value) throws Exception {
+					return value.f1;
+				}
+			})
+			.equalTo(new KeySelector<Tuple2<Long, Long>, Long>() {
+				@Override
+				public Long getKey(Tuple2<Long, Long> value) throws Exception {
+					return value.f0;
+				}
+			})
+			.window(TumblingEventTimeWindows.of(Time.seconds(WINDOW_SIZE)))
+			.apply(new JoinFunction<Tuple2<Long, Long>, Tuple2<Long, Long>, Tuple4<Long, Long, Long, Boolean>>() {
+				@Override
+				public Tuple4<Long, Long, Long, Boolean> join(Tuple2<Long, Long> first, Tuple2<Long, Long> second) throws Exception {
+					Tuple4<Long, Long, Long, Boolean> tuple4 = new Tuple4<>(first.f0, Math.min(first.f1, second.f1), second.f1, (first.f1 > second.f1));
+					System.out.println(tuple4 + " "+first.f1);
+					return tuple4;
+				}
+			})
+			.assignTimestampsAndWatermarks(new AscendingTimestampExtractor<Tuple4<Long, Long, Long, Boolean>>() {
+
+				@Override
+				public long extractAscendingTimestamp(Tuple4<Long, Long, Long, Boolean> record) {
+					return new Timestamp(System.currentTimeMillis()+1000).getTime();
+				}
+			})
+			;
+
+
 		// ----- Iteration ends
 
+		SplitStream<Tuple4<Long, Long, Long, Boolean>> split = loop.split(
+			new OutputSelector<Tuple4<Long, Long, Long, Boolean>>() {
+				@Override
+				public Iterable<String> select(Tuple4<Long, Long, Long, Boolean> value) {
+					List<String> output = new ArrayList<>();
+					output.add("iterate");
+					return output;
+				}
+			}
+		);
 
+
+		it.closeWith(split.select("iterate"));
 		// close iteration
-		it.closeWith(changes);
-		changes.print();
+		split.select("output").print();
 
 		env.execute("Streaming Connected components");
 	}
@@ -99,8 +176,8 @@ public class ConnectedComponents {
 			invertedEdge.f1 = edge.f0;
 			out.collect(edge);
 			out.collect(invertedEdge);
-			out.collect(new Tuple2<>(edge.f0, edge.f0));
-			out.collect(new Tuple2<>(edge.f1, edge.f1));
+//			out.collect(new Tuple2<>(edge.f0, edge.f0));
+//			out.collect(new Tuple2<>(edge.f1, edge.f1));
 		}
 	}
 
@@ -133,7 +210,7 @@ public class ConnectedComponents {
 
 				ctx.collect(new Tuple2<Long, Long>(source++, dest++));
 
-				Thread.sleep(50L);
+//				Thread.sleep(50L);
 			}
 		}
 
