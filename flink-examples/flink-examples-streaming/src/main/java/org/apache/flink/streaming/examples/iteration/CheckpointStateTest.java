@@ -13,6 +13,7 @@ import org.apache.flink.streaming.api.functions.source.RichParallelSourceFunctio
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -20,6 +21,7 @@ import java.util.Random;
 
 public class CheckpointStateTest {
 	private static final Logger LOG = LoggerFactory.getLogger(CheckpointStateTest.class);
+	private static final String TOUCH_FILE = "CheckpointStateTest.marker";
 
 	public static void main(String[] args) throws Exception {
 		new CheckpointStateTest();
@@ -27,10 +29,13 @@ public class CheckpointStateTest {
 
 	public CheckpointStateTest() throws Exception {
 		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment().setBufferTimeout(1);
-		env.getCheckpointConfig().setCheckpointInterval(1000);
+		env.getCheckpointConfig().setCheckpointInterval(5000);
 		env.getCheckpointConfig().setForceCheckpointing(true);
 		env.setStateBackend(new FsStateBackend("file:///stateFile/", false));
 		env.setParallelism(1);
+
+		// Delete any existing touch files
+		resetTouchFile();
 
 		DataStream<Tuple2<Long, Boolean>> inputStream = env.addSource(new NumberSource());
 		IterativeStream<Tuple2<Long, Boolean>> iteration = inputStream.map(CheckpointStateTest::noOpMap).iterate();
@@ -69,18 +74,22 @@ public class CheckpointStateTest {
 			final Object lock = ctx.getCheckpointLock();
 
 			while (isRunning) {
-				if (number <= 10000) {
+				if (number <= 100000) {
 					synchronized (lock) {
 						ctx.collect(new Tuple2<Long, Boolean>(number++, false));
 					}
-				}
 
-				Thread.sleep(1);
+					Thread.sleep(1); //cannot remove thread.sleep coz number generation will be too fast that it will trigger RTE before the first checkpoint (i.e. no recovery from checkpoint happens)
 
-				Random random = new Random();
-				if (random.nextInt(100) < 1) {
-					LOG.debug("*********THROW RTE*********");
-					throw new RuntimeException();
+					Random random = new Random();
+					if (random.nextInt(5000) == 1) { // probability of RTE needs to be low enough that it will be triggered after the first checkpoint
+						File f = new File(TOUCH_FILE);
+						if (!f.exists()) {
+							f.createNewFile();
+							LOG.debug("*********THROW RTE*********");
+							throw new RuntimeException();
+						}
+					}
 				}
 			}
 		}
@@ -102,7 +111,15 @@ public class CheckpointStateTest {
 				number = s;
 				LOG.debug("NumberSource load tuple={}", number);
 			}
+
+			resetTouchFile();
 		}
+	}
+
+	private static void resetTouchFile() {
+		LOG.debug("touch file deleted");
+		File f = new File(TOUCH_FILE);
+		f.delete();
 	}
 
 	private class ChecksumChecker implements MapFunction<Tuple2<Long, Boolean>, Tuple2<Long, Boolean>>, ListCheckpointed<Long> {
@@ -112,12 +129,8 @@ public class CheckpointStateTest {
 		public Tuple2<Long, Boolean> map(Tuple2<Long, Boolean> tuple) throws Exception {
 			if (tuple.f1) {
 				// if tuple already entered the loop in a previous iteration
-
-				// TODO
-				//		sum = sum ^ tuple.f0;
-
 				sum = sum + tuple.f0;
-				LOG.debug("tuple={} added to current sum={}", tuple.f0, sum);
+				LOG.debug("tuple={} sum={}", tuple.f0, sum);
 				tuple.f1 = false;
 			} else {
 				// first time entering iterationBody
