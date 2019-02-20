@@ -111,8 +111,6 @@ public class CheckpointStateTest {
 				number = s;
 				LOG.debug("NumberSource load tuple={}", number);
 			}
-
-			resetTouchFile();
 		}
 	}
 
