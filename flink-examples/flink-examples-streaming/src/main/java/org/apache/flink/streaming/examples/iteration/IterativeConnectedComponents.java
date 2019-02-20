@@ -10,21 +10,19 @@ import org.apache.flink.api.common.state.ListStateDescriptor;
 import org.apache.flink.api.common.state.ValueState;
 import org.apache.flink.api.common.state.ValueStateDescriptor;
 import org.apache.flink.api.java.functions.KeySelector;
-import org.apache.flink.api.java.tuple.Tuple;
 import org.apache.flink.api.java.tuple.Tuple2;
-import org.apache.flink.api.java.tuple.Tuple4;
 import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.TaskManagerOptions;
 import org.apache.flink.configuration.WebOptions;
 //import org.apache.flink.runtime.testingUtils.TestingCluster;
+import org.apache.flink.shaded.guava18.com.google.common.collect.Lists;
 import org.apache.flink.streaming.api.collector.selector.OutputSelector;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.IterativeStream;
 import org.apache.flink.streaming.api.datastream.SplitStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.co.CoProcessFunction;
-import org.apache.flink.streaming.api.functions.sink.SinkFunction;
 import org.apache.flink.streaming.api.functions.windowing.ProcessWindowFunction;
 import org.apache.flink.streaming.api.windowing.assigners.TumblingProcessingTimeWindows;
 import org.apache.flink.streaming.api.windowing.time.Time;
@@ -41,7 +39,6 @@ import org.slf4j.LoggerFactory;
 
 import java.io.Serializable;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 
@@ -101,12 +98,12 @@ public class IterativeConnectedComponents {
 	}
 
 	public static class Label implements Serializable {
-		public final int label;
 		public final int vid;
+		public final int minLabel;
 
-		public Label(int label, int vid) {
-			this.label = label;
+		public Label(int vid, int minLabel) {
 			this.vid = vid;
+			this.minLabel = minLabel;
 		}
 	}
 
@@ -159,7 +156,7 @@ public class IterativeConnectedComponents {
 	public void runCC() throws Exception {
 
 		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-		env.setParallelism(4);
+		env.setParallelism(1);
 		ArrayList<Edge> edges = new ArrayList<>();
 
 		for (Integer[] o : EDGES) {
@@ -187,12 +184,12 @@ public class IterativeConnectedComponents {
 			.flatMap(new RichFlatMapFunction<Edge, Either<Edge, EOS>>() {
 
 				private transient Collector<Either<Edge, EOS>> out;
-				private transient HashSet<Integer> helper;
+				private transient List<Integer> helper;
 
 				@Override
 				public void open(Configuration parameters) throws Exception {
 					super.open(parameters);
-					helper = new HashSet<>();
+					helper = new ArrayList<>();
 					out = null;
 				}
 
@@ -218,12 +215,12 @@ public class IterativeConnectedComponents {
 			.flatMap(new RichFlatMapFunction<Label, Either<Label, EOS>>() {
 
 				private transient Collector<Either<Label, EOS>> out;
-				private transient HashSet<Integer> helper;
+				private transient List<Integer> helper;
 
 				@Override
 				public void open(Configuration parameters) throws Exception {
 					super.open(parameters);
-					helper = new HashSet<>();
+					helper = new ArrayList<>();
 					out = null;
 				}
 
@@ -240,7 +237,7 @@ public class IterativeConnectedComponents {
 						this.out = out;
 					}
 					out.collect(Either.Left(value));
-					helper.add(value.vid);
+					helper.add(value.minLabel);
 				}
 			});
 
@@ -258,7 +255,7 @@ public class IterativeConnectedComponents {
 			.keyBy(new KeySelector<Either<Label, EOS>, Integer>() {
 				@Override
 				public Integer getKey(Either<Label, EOS> value) throws Exception {
-					return value.isLeft() ? value.left().label : value.right().u;
+					return value.isLeft() ? value.left().vid : value.right().u;
 				}
 			})
 			.connect(edgeStream.keyBy(new KeySelector<Either<Edge, EOS>, Integer>() {
@@ -270,6 +267,9 @@ public class IterativeConnectedComponents {
 			.process(new CoProcessFunction<Either<Label, EOS>, Either<Edge, EOS>, Either<Label, EOS>>() {
 
 				private transient ListState<Integer> outVertex;
+				private transient ListState<Integer> labels;
+				private transient ListState<Boolean> outVertexSeen;
+				private transient ListState<Boolean> labelsSeen;
 				private transient ValueState<Integer> minLabel;
 				private transient ValueState<Boolean> hasEOF1;
 				private transient ValueState<Boolean> hasEOF2;
@@ -278,25 +278,51 @@ public class IterativeConnectedComponents {
 				public void open(Configuration parameters) throws Exception {
 					super.open(parameters);
 					outVertex = getRuntimeContext().getListState(new ListStateDescriptor<>("out-vertex", Integer.class));
+					outVertexSeen = getRuntimeContext().getListState(new ListStateDescriptor<>("out-vertex-seen", Boolean.class));
+					labels = getRuntimeContext().getListState(new ListStateDescriptor<>("labels", Integer.class));
+					labelsSeen = getRuntimeContext().getListState(new ListStateDescriptor<>("labels-seen", Boolean.class));
 					minLabel = getRuntimeContext().getState(new ValueStateDescriptor<>("minLabel", Integer.class));
 					hasEOF1 = getRuntimeContext().getState(new ValueStateDescriptor<>("eof1", Boolean.class));
 					hasEOF2 = getRuntimeContext().getState(new ValueStateDescriptor<>("eof2", Boolean.class));
 				}
 
+				private boolean seenAll() throws Exception {
+
+					int labelsSize = Lists.newArrayList(labels.get().iterator()).size();
+					int labelsSeensize = Lists.newArrayList(labelsSeen.get().iterator()).size();
+					int outVertexSize = Lists.newArrayList(outVertex.get().iterator()).size();
+					int outVertexSeenSize = Lists.newArrayList(outVertexSeen.get().iterator()).size();
+
+
+//					System.out.println(minLabel.value()+": "+labelsSize+" "+ labelsSeensize+" "+ outVertexSize+ " " + outVertexSeenSize);
+
+					return 	labelsSize == labelsSeensize &&
+							outVertexSize == outVertexSeenSize;
+				}
+
+				private void resetSeenValues(){
+//					outVertexSeen.clear();
+//					outVertex.clear();
+					labelsSeen.clear();
+					labels.clear();
+				}
+
 				@Override
 				public void processElement1(Either<Label, EOS> in, Context ctx, Collector<Either<Label, EOS>> out) throws Exception {
 					if (in.isLeft()) {
+						labels.add(in.left().vid);
 						Integer v;
 						if ((v = minLabel.value()) == null) {
-							minLabel.update(in.left().vid);
+							minLabel.update(in.left().minLabel);
 
-						} else if (v > in.left().vid) {
-							minLabel.update(in.left().vid);
+						} else if (v > in.left().minLabel) {
+							minLabel.update(in.left().minLabel);
 						}
 					} else {
 						hasEOF1.update(true);
 						Integer minVal;
-						if (hasEOF2.value() != null && hasEOF2.value() && (minVal = minLabel.value()) != null) {
+						labelsSeen.add(true);
+						if (hasEOF2.value() != null && hasEOF2.value() && (minVal = minLabel.value()) != null && seenAll()) {
 							for (int vertex : outVertex.get()) {
 								out.collect(Either.Left(new Label(vertex, minVal)));
 							}
@@ -306,16 +332,9 @@ public class IterativeConnectedComponents {
 							}
 //							out.collect(Either.Right(new EOS(minVal)));
 							hasEOF1.update(false);
+							resetSeenValues();
 						}
 					}
-
-//					System.out.println("++++++++++++++++++");
-//					System.out.println(minLabel.value());
-//					for(Integer i: outVertex.get()){
-//						System.out.print(i + ", " );
-//					}
-//					System.out.println();
-//					System.out.println("----------------");
 				}
 
 				@Override
@@ -323,9 +342,10 @@ public class IterativeConnectedComponents {
 					if (in.isLeft()) {
 						outVertex.add(in.left().u);
 					} else {
+						outVertexSeen.add(true);
 						hasEOF2.update(true);
 						Integer minVal;
-						if (hasEOF1.value() != null && hasEOF1.value() && (minVal = minLabel.value()) != null) {
+						if (hasEOF1.value() != null && hasEOF1.value() && (minVal = minLabel.value()) != null && seenAll()) {
 							for (int vertex : outVertex.get()) {
 								out.collect(Either.Left(new Label(vertex, minVal)));
 							}
@@ -333,6 +353,7 @@ public class IterativeConnectedComponents {
 								out.collect(Either.Right(new EOS(vertex)));
 							}
 							hasEOF1.update(false);
+							resetSeenValues();
 						}
 					}
 				}
@@ -340,7 +361,6 @@ public class IterativeConnectedComponents {
 
 		SplitStream<Either<Label, EOS>> splitStream = nextStep.split((OutputSelector<Either<Label, EOS>>) value -> {
 			List<String> output = new ArrayList<>();
-			// Send some numbers to output (set in pctSendToOutput), the rest back to the iteration
 			output.add("output");
 			output.add("iterate");
 
@@ -349,6 +369,7 @@ public class IterativeConnectedComponents {
 
 		labelsIt
 			.closeWith(splitStream.select("iterate"));
+
 //		labelsIt.print();
 		splitStream.select("output")
 			.filter(new FilterFunction<Either<Label, EOS>>() {
@@ -360,16 +381,16 @@ public class IterativeConnectedComponents {
 			.keyBy(new KeySelector<Either<Label,EOS>, Integer>() {
 				@Override
 				public Integer getKey(Either<Label, EOS> value) throws Exception {
-					return value.left().vid;
+					return value.left().minLabel;
 				}
 			})
-			.window(TumblingProcessingTimeWindows.of(Time.milliseconds(10)))
+			.window(TumblingProcessingTimeWindows.of(Time.seconds(1)))
 			.process(new ProcessWindowFunction<Either<Label,EOS>, Tuple2<Integer, String>, Integer, TimeWindow>() {
 				@Override
 				public void process(Integer key, Context context, Iterable<Either<Label, EOS>> elements, Collector<Tuple2<Integer, String>> out) throws Exception {
 					HashSet<String> set = new HashSet<String>();
 					for(Either<Label, EOS> element: elements){
-						set.add(Integer.toString(element.left().label));
+						set.add(Integer.toString(element.left().vid));
 					}
 					String s = String.join("|", set);
 					out.collect(new Tuple2<>(key, s));
@@ -378,18 +399,6 @@ public class IterativeConnectedComponents {
 			})
 			.print()
 			;
-
-//			.addSink(new SinkFunction<Either<Label, EOS>>() {
-//				@Override
-//				public void invoke(Either<Label, EOS> value) throws Exception {
-//					if (value.isLeft()) {
-//						LOG.info("Got Out {} <-> {}", value.left().label, value.left().vid);
-//					} else {
-//						LOG.info("Got EOS {}", value.right().u);
-//					}
-//				}
-//			});
-
 
 		env.execute();
 
