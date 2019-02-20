@@ -1,6 +1,7 @@
 package org.apache.flink.streaming.examples.iteration;
 
 
+import org.apache.flink.api.common.functions.FilterFunction;
 import org.apache.flink.api.common.functions.FlatMapFunction;
 import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.common.functions.RichFlatMapFunction;
@@ -9,17 +10,25 @@ import org.apache.flink.api.common.state.ListStateDescriptor;
 import org.apache.flink.api.common.state.ValueState;
 import org.apache.flink.api.common.state.ValueStateDescriptor;
 import org.apache.flink.api.java.functions.KeySelector;
+import org.apache.flink.api.java.tuple.Tuple;
+import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.api.java.tuple.Tuple4;
 import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.TaskManagerOptions;
 import org.apache.flink.configuration.WebOptions;
 //import org.apache.flink.runtime.testingUtils.TestingCluster;
+import org.apache.flink.streaming.api.collector.selector.OutputSelector;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.IterativeStream;
+import org.apache.flink.streaming.api.datastream.SplitStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.co.CoProcessFunction;
 import org.apache.flink.streaming.api.functions.sink.SinkFunction;
+import org.apache.flink.streaming.api.functions.windowing.ProcessWindowFunction;
+import org.apache.flink.streaming.api.windowing.assigners.TumblingProcessingTimeWindows;
+import org.apache.flink.streaming.api.windowing.time.Time;
+import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
 import org.apache.flink.types.Either;
 import org.apache.flink.util.Collector;
 //import org.junit.AfterClass;
@@ -34,6 +43,7 @@ import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
 
 public class IterativeConnectedComponents {
 
@@ -242,7 +252,7 @@ public class IterativeConnectedComponents {
 					return in;
 				}
 			})
-			.iterate(1000);
+			.iterate(1_000_000);
 
 		DataStream<Either<Label, EOS>> nextStep = labelsIt
 			.keyBy(new KeySelector<Either<Label, EOS>, Integer>() {
@@ -299,13 +309,13 @@ public class IterativeConnectedComponents {
 						}
 					}
 
-					System.out.println("++++++++++++++++++");
-					System.out.println(minLabel.value());
-					for(Integer i: outVertex.get()){
-						System.out.print(i + ", " );
-					}
-					System.out.println();
-					System.out.println("----------------");
+//					System.out.println("++++++++++++++++++");
+//					System.out.println(minLabel.value());
+//					for(Integer i: outVertex.get()){
+//						System.out.print(i + ", " );
+//					}
+//					System.out.println();
+//					System.out.println("----------------");
 				}
 
 				@Override
@@ -328,18 +338,58 @@ public class IterativeConnectedComponents {
 				}
 			});
 
+		SplitStream<Either<Label, EOS>> splitStream = nextStep.split((OutputSelector<Either<Label, EOS>>) value -> {
+			List<String> output = new ArrayList<>();
+			// Send some numbers to output (set in pctSendToOutput), the rest back to the iteration
+			output.add("output");
+			output.add("iterate");
+
+			return output;
+		});
+
 		labelsIt
-			.closeWith(nextStep)
-			.addSink(new SinkFunction<Either<Label, EOS>>() {
+			.closeWith(splitStream.select("iterate"));
+//		labelsIt.print();
+		splitStream.select("output")
+			.filter(new FilterFunction<Either<Label, EOS>>() {
 				@Override
-				public void invoke(Either<Label, EOS> value) throws Exception {
-					if (value.isLeft()) {
-						LOG.info("Got Out {} <-> {}", value.left().label, value.left().vid);
-					} else {
-						LOG.info("Got EOS {}", value.right().u);
-					}
+				public boolean filter(Either<Label, EOS> value) throws Exception {
+					return value.isLeft();
 				}
-			});
+			})
+			.keyBy(new KeySelector<Either<Label,EOS>, Integer>() {
+				@Override
+				public Integer getKey(Either<Label, EOS> value) throws Exception {
+					return value.left().vid;
+				}
+			})
+			.window(TumblingProcessingTimeWindows.of(Time.milliseconds(10)))
+			.process(new ProcessWindowFunction<Either<Label,EOS>, Tuple2<Integer, String>, Integer, TimeWindow>() {
+				@Override
+				public void process(Integer key, Context context, Iterable<Either<Label, EOS>> elements, Collector<Tuple2<Integer, String>> out) throws Exception {
+					HashSet<String> set = new HashSet<String>();
+					for(Either<Label, EOS> element: elements){
+						set.add(Integer.toString(element.left().label));
+					}
+					String s = String.join("|", set);
+					out.collect(new Tuple2<>(key, s));
+				}
+
+			})
+			.print()
+			;
+
+//			.addSink(new SinkFunction<Either<Label, EOS>>() {
+//				@Override
+//				public void invoke(Either<Label, EOS> value) throws Exception {
+//					if (value.isLeft()) {
+//						LOG.info("Got Out {} <-> {}", value.left().label, value.left().vid);
+//					} else {
+//						LOG.info("Got EOS {}", value.right().u);
+//					}
+//				}
+//			});
+
 
 		env.execute();
 
