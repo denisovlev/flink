@@ -46,7 +46,7 @@ public class DeadlockingIterateExample {
 
 		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment().setBufferTimeout(1);
 		env.getCheckpointConfig().setCheckpointInterval(5000);
-		env.setStateBackend(new FsStateBackend("file:///stateFile/", false));
+		env.setStateBackend(new FsStateBackend("file:///" + System.getProperty("java.io.tmpdir") + "/feedbacklooptempdir/checkpoint", false));
 
 		DataStream<Tuple4<Long, Long, Long, Long>> inputStream = env.addSource(
 			new NumberSource(fastPeriodMs, slowPeriodMs, fastPeriodSpeed, slowPeriodSpeed, cycles));
