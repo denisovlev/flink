@@ -41,7 +41,7 @@ public class CheckpointStateTest {
 		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment().setBufferTimeout(1);
 		env.getCheckpointConfig().setCheckpointInterval(checkpointInterval);
 		env.getCheckpointConfig().setForceCheckpointing(true);
-		env.setStateBackend(new FsStateBackend("file:///stateFile/", false));
+		env.setStateBackend(new FsStateBackend("file:///" + System.getProperty("java.io.tmpdir") + "/feedbacklooptempdir/checkpoint", false));
 		env.setParallelism(1);
 
 		// Delete any existing touch files
