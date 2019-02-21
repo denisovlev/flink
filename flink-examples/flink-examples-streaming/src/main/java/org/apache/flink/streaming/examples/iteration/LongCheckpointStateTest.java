@@ -50,9 +50,6 @@ public class LongCheckpointStateTest {
 		env.setStateBackend(new FsStateBackend("file:///" + System.getProperty("java.io.tmpdir") + "/feedbacklooptempdir/checkpoint", false));
 		env.setParallelism(parallelism);
 
-		// Delete any existing touch files
-		resetTouchFile();
-
 		DataStream<Tuple2<Long, Boolean>> inputStream = env.addSource(new NumberSource(endNumber, probability, minExceptionElapseTime, speed));
 		IterativeStream<Tuple2<Long, Boolean>> iteration = inputStream.map(LongCheckpointStateTest::noOpMap).iterate();
 		DataStream<Tuple2<Long, Boolean>> iterationBody = iteration.map(new ChecksumChecker());
@@ -99,6 +96,9 @@ public class LongCheckpointStateTest {
 		@Override
 		public void run(SourceContext<Tuple2<Long, Boolean>> ctx) throws Exception {
 			final Object lock = ctx.getCheckpointLock();
+
+			// Delete any existing touch files
+			resetTouchFile();
 
 			while (isRunning) {
 				if (number <= endNumber) {
