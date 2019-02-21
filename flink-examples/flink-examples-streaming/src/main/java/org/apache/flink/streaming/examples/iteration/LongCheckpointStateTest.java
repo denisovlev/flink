@@ -24,12 +24,24 @@ public class LongCheckpointStateTest {
 	private static final String TOUCH_FILE = "LongCheckpointStateTest.marker";
 
 	public static void main(String[] args) throws Exception {
-		new LongCheckpointStateTest();
+		new LongCheckpointStateTest(args);
 	}
 
-	public LongCheckpointStateTest() throws Exception {
+	public LongCheckpointStateTest(String[] args) throws Exception {
+		int checkpointInterval = 2 * 60000;
+		long endNumber = 100000;
+		int probability = 5000;
+		int minExceptionElapseTime = 60000;
+
+		if (args.length >= 4) {
+			checkpointInterval = Integer.parseInt(args[0]);
+			endNumber = Long.parseLong(args[1]);
+			probability = Integer.parseInt(args[2]);
+			minExceptionElapseTime = Integer.parseInt(args[3]);
+		}
+
 		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment().setBufferTimeout(1);
-		env.getCheckpointConfig().setCheckpointInterval(2 * 60000);
+		env.getCheckpointConfig().setCheckpointInterval(checkpointInterval);
 		env.getCheckpointConfig().setForceCheckpointing(true);
 		env.setStateBackend(new FsStateBackend("file:///stateFile/", false));
 		env.setParallelism(1);
@@ -37,7 +49,7 @@ public class LongCheckpointStateTest {
 		// Delete any existing touch files
 		resetTouchFile();
 
-		DataStream<Tuple2<Long, Boolean>> inputStream = env.addSource(new NumberSource());
+		DataStream<Tuple2<Long, Boolean>> inputStream = env.addSource(new NumberSource(endNumber, probability, minExceptionElapseTime));
 		IterativeStream<Tuple2<Long, Boolean>> iteration = inputStream.map(LongCheckpointStateTest::noOpMap).iterate();
 		DataStream<Tuple2<Long, Boolean>> iterationBody = iteration.map(new ChecksumChecker());
 
@@ -68,13 +80,22 @@ public class LongCheckpointStateTest {
 	private class NumberSource extends RichParallelSourceFunction<Tuple2<Long, Boolean>> implements ListCheckpointed<Long> {
 		private boolean isRunning = true;
 		private long number = 0;
+		private long endNumber;
+		private int probability;
+		private int minExceptionElapseTime;
+
+		public NumberSource(long endNumber, int probability, int minExceptionElapseTime) {
+			this.endNumber = endNumber;
+			this.probability = probability;
+			this.minExceptionElapseTime = minExceptionElapseTime;
+		}
 
 		@Override
 		public void run(SourceContext<Tuple2<Long, Boolean>> ctx) throws Exception {
 			final Object lock = ctx.getCheckpointLock();
 
 			while (isRunning) {
-				if (number <= 100000) {
+				if (number <= endNumber) {
 					synchronized (lock) {
 						ctx.collect(new Tuple2<Long, Boolean>(number++, false));
 					}
@@ -82,10 +103,10 @@ public class LongCheckpointStateTest {
 					Thread.sleep(1); //cannot remove thread.sleep coz number generation will be too fast that it will trigger RTE before the first checkpoint (i.e. no recovery from checkpoint happens)
 
 					Random random = new Random();
-					if (random.nextInt(5000) == 1) { // probability of RTE needs to be low enough that it will be triggered after the first checkpoint
+					if (random.nextInt(probability) == 1) { // probability of RTE needs to be low enough that it will be triggered after the first checkpoint
 						long lastExceptionTime = getLastExceptionTime();
 						long diff = System.currentTimeMillis() - lastExceptionTime;
-						if (lastExceptionTime == 0 || diff >= 60000) { // 1 minute
+						if (lastExceptionTime == 0 || diff >= minExceptionElapseTime) { // 1 minute
 							LOG.debug("*********THROW RTE*********" + lastExceptionTime + " " + diff);
 
 							FileOutputStream fos = new FileOutputStream(TOUCH_FILE);
