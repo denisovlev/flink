@@ -104,24 +104,24 @@ public class LongCheckpointStateTest {
 				if (number <= endNumber) {
 					synchronized (lock) {
 						ctx.collect(new Tuple2<Long, Boolean>(number++, false));
-					}
 
-					Thread.sleep(speed); //cannot remove thread.sleep coz number generation will be too fast that it will trigger RTE before the first checkpoint (i.e. no recovery from checkpoint happens)
+						Thread.sleep(speed); //cannot remove thread.sleep coz number generation will be too fast that it will trigger RTE before the first checkpoint (i.e. no recovery from checkpoint happens)
 
-					Random random = new Random();
-					if (random.nextInt(probability) == 1) { // probability of RTE needs to be low enough that it will be triggered after the first checkpoint
-						long lastExceptionTime = getLastExceptionTime();
-						long diff = System.currentTimeMillis() - lastExceptionTime;
-						if (lastExceptionTime == 0 || diff >= minExceptionElapseTime) { // 1 minute
-							LOG.debug("*********THROW RTE*********" + lastExceptionTime + " " + diff);
+						Random random = new Random();
+						if (random.nextInt(probability) == 1) { // probability of RTE needs to be low enough that it will be triggered after the first checkpoint
+							long lastExceptionTime = getLastExceptionTime();
+							long diff = System.currentTimeMillis() - lastExceptionTime;
+							if (lastExceptionTime == 0 || diff >= minExceptionElapseTime) { // 1 minute
+								LOG.debug("*********THROW RTE*********" + lastExceptionTime + " " + diff);
 
-							FileOutputStream fos = new FileOutputStream(TOUCH_FILE);
-							DataOutputStream dos = new DataOutputStream(fos);
-							dos.writeLong(System.currentTimeMillis());
+								FileOutputStream fos = new FileOutputStream(TOUCH_FILE);
+								DataOutputStream dos = new DataOutputStream(fos);
+								dos.writeLong(System.currentTimeMillis());
 
-							dos.close();
+								dos.close();
 
-							throw new RuntimeException();
+								throw new RuntimeException();
+							}
 						}
 					}
 				}

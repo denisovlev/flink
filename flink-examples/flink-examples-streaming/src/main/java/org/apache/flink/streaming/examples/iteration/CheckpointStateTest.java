@@ -100,17 +100,17 @@ public class CheckpointStateTest {
 				if (number <= endNumber) {
 					synchronized (lock) {
 						ctx.collect(new Tuple2<Long, Boolean>(number++, false));
-					}
 
-					Thread.sleep(speed); //cannot remove thread.sleep coz number generation will be too fast that it will trigger RTE before the first checkpoint (i.e. no recovery from checkpoint happens)
+						Thread.sleep(speed); //cannot remove thread.sleep coz number generation will be too fast that it will trigger RTE before the first checkpoint (i.e. no recovery from checkpoint happens)
 
-					Random random = new Random();
-					if (random.nextInt(probability) == 1) { // probability of RTE needs to be low enough that it will be triggered after the first checkpoint
-						File f = new File(TOUCH_FILE);
-						if (!f.exists()) {
-							f.createNewFile();
-							LOG.debug("*********THROW RTE*********");
-							throw new RuntimeException();
+						Random random = new Random();
+						if (random.nextInt(probability) == 1) { // probability of RTE needs to be low enough that it will be triggered after the first checkpoint
+							File f = new File(TOUCH_FILE);
+							if (!f.exists()) {
+								f.createNewFile();
+								LOG.debug("*********THROW RTE*********");
+								throw new RuntimeException();
+							}
 						}
 					}
 				}
