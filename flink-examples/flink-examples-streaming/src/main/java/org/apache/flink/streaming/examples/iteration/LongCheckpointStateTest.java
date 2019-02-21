@@ -97,9 +97,6 @@ public class LongCheckpointStateTest {
 		public void run(SourceContext<Tuple2<Long, Boolean>> ctx) throws Exception {
 			final Object lock = ctx.getCheckpointLock();
 
-			// Delete any existing touch files
-			resetTouchFile();
-
 			while (isRunning) {
 				if (number <= endNumber) {
 					synchronized (lock) {
@@ -158,12 +155,6 @@ public class LongCheckpointStateTest {
 		} catch (IOException e) {
 		}
 		return timestamp;
-	}
-
-	private static void resetTouchFile() {
-		File f = new File(TOUCH_FILE);
-		LOG.debug("deleted touch file..." + f.getAbsolutePath());
-		f.delete();
 	}
 
 	private class ChecksumChecker implements MapFunction<Tuple2<Long, Boolean>, Tuple2<Long, Boolean>>, ListCheckpointed<Long> {
