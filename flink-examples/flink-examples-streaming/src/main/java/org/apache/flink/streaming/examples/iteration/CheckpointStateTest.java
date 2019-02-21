@@ -21,7 +21,7 @@ import java.util.Random;
 
 public class CheckpointStateTest {
 	private static final Logger LOG = LoggerFactory.getLogger(CheckpointStateTest.class);
-	private static final String TOUCH_FILE = "CheckpointStateTest.marker";
+	private static final String TOUCH_FILE = System.getProperty("java.io.tmpdir") + "/CheckpointStateTest.marker";
 
 	public static void main(String[] args) throws Exception {
 		new CheckpointStateTest(args);
@@ -46,12 +46,12 @@ public class CheckpointStateTest {
 		env.getCheckpointConfig().setCheckpointInterval(checkpointInterval);
 		env.getCheckpointConfig().setForceCheckpointing(true);
 		env.setStateBackend(new FsStateBackend("file:///" + System.getProperty("java.io.tmpdir") + "/feedbacklooptempdir/checkpoint", false));
-		env.setParallelism(parallelism);
 
 		// Delete any existing touch files
 		resetTouchFile();
 
-		DataStream<Tuple2<Long, Boolean>> inputStream = env.addSource(new NumberSource(endNumber, probability, speed));
+		DataStream<Tuple2<Long, Boolean>> inputStream = env.addSource(new NumberSource(endNumber, probability, speed))
+			.setParallelism(parallelism);
 		IterativeStream<Tuple2<Long, Boolean>> iteration = inputStream.map(CheckpointStateTest::noOpMap).iterate();
 		DataStream<Tuple2<Long, Boolean>> iterationBody = iteration.map(new ChecksumChecker());
 
