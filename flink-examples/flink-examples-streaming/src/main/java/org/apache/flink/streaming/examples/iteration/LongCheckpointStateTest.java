@@ -48,12 +48,12 @@ public class LongCheckpointStateTest {
 		env.getCheckpointConfig().setCheckpointInterval(checkpointInterval);
 		env.getCheckpointConfig().setForceCheckpointing(true);
 		env.setStateBackend(new FsStateBackend("file:///" + System.getProperty("java.io.tmpdir") + "/feedbacklooptempdir/checkpoint", false));
+		env.setParallelism(parallelism);
 
 		// Delete any existing touch files
 		resetTouchFile();
 
-		DataStream<Tuple2<Long, Boolean>> inputStream = env.addSource(new NumberSource(endNumber, probability, minExceptionElapseTime, speed))
-			.setParallelism(parallelism);
+		DataStream<Tuple2<Long, Boolean>> inputStream = env.addSource(new NumberSource(endNumber, probability, minExceptionElapseTime, speed));
 		IterativeStream<Tuple2<Long, Boolean>> iteration = inputStream.map(LongCheckpointStateTest::noOpMap).iterate();
 		DataStream<Tuple2<Long, Boolean>> iterationBody = iteration.map(new ChecksumChecker());
 
@@ -71,7 +71,7 @@ public class LongCheckpointStateTest {
 		iteration.closeWith(splitStream.select("iterate"));
 		splitStream.select("output").print();
 
-		env.execute("CheckpointStateTest");
+		env.execute("LongCheckpointStateTest");
 	}
 
 	private static Tuple2<Long, Boolean> noOpMap(Tuple2<Long, Boolean> value) {
