@@ -170,17 +170,18 @@ public class IterativeConnectedComponents {
 			labels.add(new Label(v, v));
 		}
 
-//		DataStream<Edge> edgesStream = getEdgesDataSet(env);
-//		DataStream<Label> labelDataStream =
-//			edgesStream.map(new MapFunction<Edge, Label>() {
-//				@Override
-//				public Label map(Edge value) throws Exception {
-//					return new Label(value.u, value.u);
-//				}
-//			});
+		DataStream<Edge> edgesStream = getEdgesDataSet(env);
+		DataStream<Label> labelDataStream =
+			edgesStream.map(new MapFunction<Edge, Label>() {
+				@Override
+				public Label map(Edge value) throws Exception {
+					return new Label(value.u, value.u);
+				}
+			});
 
 		DataStream<Either<Edge, EOS>> edgeStream =
-			env.fromCollection(edges)
+			edgesStream
+//			env.fromCollection(edges)
 			.flatMap(new RichFlatMapFunction<Edge, Either<Edge, EOS>>() {
 
 				private transient Collector<Either<Edge, EOS>> out;
@@ -211,7 +212,8 @@ public class IterativeConnectedComponents {
 			});
 
 		DataStream<Either<Label, EOS>> labelStream =
-			env.fromCollection(labels)
+//			env.fromCollection(labels)
+			labelDataStream
 			.flatMap(new RichFlatMapFunction<Label, Either<Label, EOS>>() {
 
 				private transient Collector<Either<Label, EOS>> out;
@@ -273,6 +275,7 @@ public class IterativeConnectedComponents {
 				private transient ValueState<Integer> minLabel;
 				private transient ValueState<Boolean> hasEOF1;
 				private transient ValueState<Boolean> hasEOF2;
+				private transient ValueState<Boolean> minChanged;
 
 				@Override
 				public void open(Configuration parameters) throws Exception {
@@ -284,6 +287,7 @@ public class IterativeConnectedComponents {
 					minLabel = getRuntimeContext().getState(new ValueStateDescriptor<>("minLabel", Integer.class));
 					hasEOF1 = getRuntimeContext().getState(new ValueStateDescriptor<>("eof1", Boolean.class));
 					hasEOF2 = getRuntimeContext().getState(new ValueStateDescriptor<>("eof2", Boolean.class));
+					minChanged = getRuntimeContext().getState(new ValueStateDescriptor<>("min-changed", Boolean.class));
 				}
 
 				private boolean seenAll() throws Exception {
@@ -314,15 +318,16 @@ public class IterativeConnectedComponents {
 						Integer v;
 						if ((v = minLabel.value()) == null) {
 							minLabel.update(in.left().minLabel);
-
+							minChanged.update(true);
 						} else if (v > in.left().minLabel) {
 							minLabel.update(in.left().minLabel);
+							minChanged.update(true);
 						}
 					} else {
 						hasEOF1.update(true);
 						Integer minVal;
 						labelsSeen.add(true);
-						if (hasEOF2.value() != null && hasEOF2.value() && (minVal = minLabel.value()) != null && seenAll()) {
+						if (hasEOF2.value() != null && hasEOF2.value() && (minVal = minLabel.value()) != null && minChangedValue() && seenAll()) {
 							for (int vertex : outVertex.get()) {
 								out.collect(Either.Left(new Label(vertex, minVal)));
 							}
@@ -332,9 +337,15 @@ public class IterativeConnectedComponents {
 							}
 //							out.collect(Either.Right(new EOS(minVal)));
 							hasEOF1.update(false);
+							minChanged.update(false);
 							resetSeenValues();
 						}
 					}
+				}
+
+				private boolean minChangedValue() throws java.io.IOException {
+					return minChanged.value() != null && minChanged.value();
+//					return true;
 				}
 
 				@Override
@@ -345,7 +356,7 @@ public class IterativeConnectedComponents {
 						outVertexSeen.add(true);
 						hasEOF2.update(true);
 						Integer minVal;
-						if (hasEOF1.value() != null && hasEOF1.value() && (minVal = minLabel.value()) != null && seenAll()) {
+						if (hasEOF1.value() != null && hasEOF1.value() && (minVal = minLabel.value()) != null && minChangedValue()  && seenAll()) {
 							for (int vertex : outVertex.get()) {
 								out.collect(Either.Left(new Label(vertex, minVal)));
 							}
@@ -353,6 +364,7 @@ public class IterativeConnectedComponents {
 								out.collect(Either.Right(new EOS(vertex)));
 							}
 							hasEOF1.update(false);
+							minChanged.update(false);
 							resetSeenValues();
 						}
 					}
@@ -384,7 +396,7 @@ public class IterativeConnectedComponents {
 					return value.left().minLabel;
 				}
 			})
-			.window(TumblingProcessingTimeWindows.of(Time.seconds(1)))
+			.window(TumblingProcessingTimeWindows.of(Time.seconds(10)))
 			.process(new ProcessWindowFunction<Either<Label,EOS>, Tuple2<Integer, String>, Integer, TimeWindow>() {
 				@Override
 				public void process(Integer key, Context context, Iterable<Either<Label, EOS>> elements, Collector<Tuple2<Integer, String>> out) throws Exception {
@@ -392,7 +404,8 @@ public class IterativeConnectedComponents {
 					for(Either<Label, EOS> element: elements){
 						set.add(Integer.toString(element.left().vid));
 					}
-					String s = String.join("|", set);
+//					String s = String.join("|", set);
+					String s = Integer.toString(set.size());
 					out.collect(new Tuple2<>(key, s));
 				}
 
