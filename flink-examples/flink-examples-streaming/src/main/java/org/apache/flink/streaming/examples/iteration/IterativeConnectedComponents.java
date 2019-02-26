@@ -52,9 +52,11 @@ public class IterativeConnectedComponents {
 	private static final int numTaskManagers = 2;
 	private static final int slotsPerTaskManager = 4;
 	private static String inputFile = "";
+	private static String outputFile = "";
 
 	public static void main(String args[]) throws Exception{
 		inputFile = args[0];
+		outputFile = args[1];
 		new IterativeConnectedComponents().runCC();
 	}
 //	private static TestingCluster cluster;
@@ -253,7 +255,7 @@ public class IterativeConnectedComponents {
 					return in;
 				}
 			})
-			.iterate(1_000_000);
+			.iterate(10000);
 
 		DataStream<Either<Label, EOS>> nextStep = labelsIt
 			.keyBy(new KeySelector<Either<Label, EOS>, Integer>() {
@@ -400,7 +402,7 @@ public class IterativeConnectedComponents {
 					return new Tuple2<Integer, Integer>(label.left().vid, label.left().minLabel);
 				}
 			})
-			.writeAsCsv("cc-output.csv", FileSystem.WriteMode.OVERWRITE, "\n", " ")
+			.writeAsCsv(outputFile, FileSystem.WriteMode.OVERWRITE, "\n", " ")
 //			.keyBy(new KeySelector<Either<Label,EOS>, Integer>() {
 //				@Override
 //				public Integer getKey(Either<Label, EOS> value) throws Exception {
