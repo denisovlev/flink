@@ -16,6 +16,7 @@ import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.TaskManagerOptions;
 import org.apache.flink.configuration.WebOptions;
 //import org.apache.flink.runtime.testingUtils.TestingCluster;
+import org.apache.flink.core.fs.FileSystem;
 import org.apache.flink.shaded.guava18.com.google.common.collect.Lists;
 import org.apache.flink.streaming.api.collector.selector.OutputSelector;
 import org.apache.flink.streaming.api.datastream.DataStream;
@@ -37,6 +38,7 @@ import org.apache.flink.util.Collector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -156,7 +158,7 @@ public class IterativeConnectedComponents {
 	public void runCC() throws Exception {
 
 		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-		env.setParallelism(1);
+//		env.setParallelism(1);
 		ArrayList<Edge> edges = new ArrayList<>();
 
 		for (Integer[] o : EDGES) {
@@ -269,9 +271,10 @@ public class IterativeConnectedComponents {
 			.process(new CoProcessFunction<Either<Label, EOS>, Either<Edge, EOS>, Either<Label, EOS>>() {
 
 				private transient ListState<Integer> outVertex;
-				private transient ListState<Integer> labels;
-				private transient ListState<Boolean> outVertexSeen;
-				private transient ListState<Boolean> labelsSeen;
+				private transient ValueState<Integer> outVertexSeenCnt;
+				private transient ValueState<Integer> outVertexEndSeenCnt;
+				private transient ValueState<Integer> labelsSeenCnt;
+				private transient ValueState<Integer> labelsEndSeenCnt;
 				private transient ValueState<Integer> minLabel;
 				private transient ValueState<Boolean> hasEOF1;
 				private transient ValueState<Boolean> hasEOF2;
@@ -281,9 +284,10 @@ public class IterativeConnectedComponents {
 				public void open(Configuration parameters) throws Exception {
 					super.open(parameters);
 					outVertex = getRuntimeContext().getListState(new ListStateDescriptor<>("out-vertex", Integer.class));
-					outVertexSeen = getRuntimeContext().getListState(new ListStateDescriptor<>("out-vertex-seen", Boolean.class));
-					labels = getRuntimeContext().getListState(new ListStateDescriptor<>("labels", Integer.class));
-					labelsSeen = getRuntimeContext().getListState(new ListStateDescriptor<>("labels-seen", Boolean.class));
+					outVertexSeenCnt = getRuntimeContext().getState(new ValueStateDescriptor<>("out-vertex-seen", Integer.class));
+					outVertexEndSeenCnt = getRuntimeContext().getState(new ValueStateDescriptor<>("out-vertex-end-seen", Integer.class));
+					labelsSeenCnt = getRuntimeContext().getState(new ValueStateDescriptor<>("labels-seen", Integer.class));
+					labelsEndSeenCnt = getRuntimeContext().getState(new ValueStateDescriptor<>("labels-end-seen", Integer.class));
 					minLabel = getRuntimeContext().getState(new ValueStateDescriptor<>("minLabel", Integer.class));
 					hasEOF1 = getRuntimeContext().getState(new ValueStateDescriptor<>("eof1", Boolean.class));
 					hasEOF2 = getRuntimeContext().getState(new ValueStateDescriptor<>("eof2", Boolean.class));
@@ -292,29 +296,24 @@ public class IterativeConnectedComponents {
 
 				private boolean seenAll() throws Exception {
 
-					int labelsSize = Lists.newArrayList(labels.get().iterator()).size();
-					int labelsSeensize = Lists.newArrayList(labelsSeen.get().iterator()).size();
-					int outVertexSize = Lists.newArrayList(outVertex.get().iterator()).size();
-					int outVertexSeenSize = Lists.newArrayList(outVertexSeen.get().iterator()).size();
-
-
-//					System.out.println(minLabel.value()+": "+labelsSize+" "+ labelsSeensize+" "+ outVertexSize+ " " + outVertexSeenSize);
+					int labelsSize = labelsSeenCnt.value();
+					int labelsSeensize = labelsEndSeenCnt.value();
+					int outVertexSize = outVertexSeenCnt.value();
+					int outVertexSeenSize = outVertexEndSeenCnt.value();
 
 					return 	labelsSize == labelsSeensize &&
 							outVertexSize == outVertexSeenSize;
 				}
 
-				private void resetSeenValues(){
-//					outVertexSeen.clear();
-//					outVertex.clear();
-					labelsSeen.clear();
-					labels.clear();
+				private void resetSeenValues() throws IOException {
+					labelsSeenCnt.update(0);
+					labelsEndSeenCnt.update(0);
 				}
 
 				@Override
 				public void processElement1(Either<Label, EOS> in, Context ctx, Collector<Either<Label, EOS>> out) throws Exception {
 					if (in.isLeft()) {
-						labels.add(in.left().vid);
+						incCounter(labelsSeenCnt);
 						Integer v;
 						if ((v = minLabel.value()) == null) {
 							minLabel.update(in.left().minLabel);
@@ -326,7 +325,7 @@ public class IterativeConnectedComponents {
 					} else {
 						hasEOF1.update(true);
 						Integer minVal;
-						labelsSeen.add(true);
+						incCounter(labelsEndSeenCnt);
 						if (hasEOF2.value() != null && hasEOF2.value() && (minVal = minLabel.value()) != null && minChangedValue() && seenAll()) {
 							for (int vertex : outVertex.get()) {
 								out.collect(Either.Left(new Label(vertex, minVal)));
@@ -335,12 +334,16 @@ public class IterativeConnectedComponents {
 							for (int vertex : outVertex.get()) {
 								out.collect(Either.Right(new EOS(vertex)));
 							}
-//							out.collect(Either.Right(new EOS(minVal)));
 							hasEOF1.update(false);
 							minChanged.update(false);
 							resetSeenValues();
 						}
 					}
+				}
+
+				private void incCounter(ValueState<Integer> cnt) throws IOException {
+					if (cnt.value() == null) cnt.update(0);
+					cnt.update(cnt.value() + 1);
 				}
 
 				private boolean minChangedValue() throws java.io.IOException {
@@ -352,8 +355,9 @@ public class IterativeConnectedComponents {
 				public void processElement2(Either<Edge, EOS> in, Context ctx, Collector<Either<Label, EOS>> out) throws Exception {
 					if (in.isLeft()) {
 						outVertex.add(in.left().u);
+						incCounter(outVertexSeenCnt);
 					} else {
-						outVertexSeen.add(true);
+						incCounter(outVertexEndSeenCnt);
 						hasEOF2.update(true);
 						Integer minVal;
 						if (hasEOF1.value() != null && hasEOF1.value() && (minVal = minLabel.value()) != null && minChangedValue()  && seenAll()) {
@@ -390,27 +394,34 @@ public class IterativeConnectedComponents {
 					return value.isLeft();
 				}
 			})
-			.keyBy(new KeySelector<Either<Label,EOS>, Integer>() {
+			.map(new MapFunction<Either<Label, EOS>, Tuple2<Integer, Integer>>() {
 				@Override
-				public Integer getKey(Either<Label, EOS> value) throws Exception {
-					return value.left().minLabel;
+				public Tuple2<Integer, Integer> map(Either<Label, EOS> label) throws Exception {
+					return new Tuple2<Integer, Integer>(label.left().vid, label.left().minLabel);
 				}
 			})
-			.window(TumblingProcessingTimeWindows.of(Time.seconds(10)))
-			.process(new ProcessWindowFunction<Either<Label,EOS>, Tuple2<Integer, String>, Integer, TimeWindow>() {
-				@Override
-				public void process(Integer key, Context context, Iterable<Either<Label, EOS>> elements, Collector<Tuple2<Integer, String>> out) throws Exception {
-					HashSet<String> set = new HashSet<String>();
-					for(Either<Label, EOS> element: elements){
-						set.add(Integer.toString(element.left().vid));
-					}
-//					String s = String.join("|", set);
-					String s = Integer.toString(set.size());
-					out.collect(new Tuple2<>(key, s));
-				}
-
-			})
-			.print()
+			.writeAsCsv("cc-output.csv", FileSystem.WriteMode.OVERWRITE, "\n", " ")
+//			.keyBy(new KeySelector<Either<Label,EOS>, Integer>() {
+//				@Override
+//				public Integer getKey(Either<Label, EOS> value) throws Exception {
+//					return value.left().minLabel;
+//				}
+//			})
+//			.window(TumblingProcessingTimeWindows.of(Time.seconds(10)))
+//			.process(new ProcessWindowFunction<Either<Label,EOS>, Tuple2<Integer, String>, Integer, TimeWindow>() {
+//				@Override
+//				public void process(Integer key, Context context, Iterable<Either<Label, EOS>> elements, Collector<Tuple2<Integer, String>> out) throws Exception {
+//					HashSet<String> set = new HashSet<String>();
+//					for(Either<Label, EOS> element: elements){
+//						set.add(Integer.toString(element.left().vid));
+//					}
+////					String s = String.join("|", set);
+//					String s = Integer.toString(set.size());
+//					out.collect(new Tuple2<>(key, s));
+//				}
+//
+//			})
+//			.print()
 			;
 
 		env.execute();
