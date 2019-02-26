@@ -53,10 +53,13 @@ public class IterativeConnectedComponents {
 	private static final int slotsPerTaskManager = 4;
 	private static String inputFile = "";
 	private static String outputFile = "";
+	private static long iterationTimeout = 0L;
 
 	public static void main(String args[]) throws Exception{
 		inputFile = args[0];
 		outputFile = args[1];
+		iterationTimeout = Long.parseLong(args[2]);
+
 		new IterativeConnectedComponents().runCC();
 	}
 //	private static TestingCluster cluster;
@@ -255,7 +258,7 @@ public class IterativeConnectedComponents {
 					return in;
 				}
 			})
-			.iterate(10000);
+			.iterate(iterationTimeout);
 
 		DataStream<Either<Label, EOS>> nextStep = labelsIt
 			.keyBy(new KeySelector<Either<Label, EOS>, Integer>() {
