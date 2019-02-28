@@ -11,19 +11,23 @@ import org.apache.flink.api.common.state.ValueState;
 import org.apache.flink.api.common.state.ValueStateDescriptor;
 import org.apache.flink.api.java.functions.KeySelector;
 import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.api.java.tuple.Tuple3;
 import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.TaskManagerOptions;
 import org.apache.flink.configuration.WebOptions;
 //import org.apache.flink.runtime.testingUtils.TestingCluster;
 import org.apache.flink.core.fs.FileSystem;
+import org.apache.flink.runtime.state.filesystem.FsStateBackend;
 import org.apache.flink.shaded.guava18.com.google.common.collect.Lists;
+import org.apache.flink.streaming.api.checkpoint.ListCheckpointed;
 import org.apache.flink.streaming.api.collector.selector.OutputSelector;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.IterativeStream;
 import org.apache.flink.streaming.api.datastream.SplitStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.co.CoProcessFunction;
+import org.apache.flink.streaming.api.functions.source.RichParallelSourceFunction;
 import org.apache.flink.streaming.api.functions.windowing.ProcessWindowFunction;
 import org.apache.flink.streaming.api.windowing.assigners.TumblingProcessingTimeWindows;
 import org.apache.flink.streaming.api.windowing.time.Time;
@@ -38,11 +42,8 @@ import org.apache.flink.util.Collector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
-import java.io.Serializable;
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
+import java.io.*;
+import java.util.*;
 
 public class IterativeConnectedComponents {
 
@@ -53,13 +54,19 @@ public class IterativeConnectedComponents {
 	private static final int slotsPerTaskManager = 4;
 	private static String inputFile = "";
 	private static String outputFile = "";
+	private static String stateFile = "";
 	private static long iterationTimeout = 0L;
 
 	public static void main(String args[]) throws Exception{
 		inputFile = args[0];
 		outputFile = args[1];
 		iterationTimeout = Long.parseLong(args[2]);
-
+		if(args.length > 3){
+			stateFile = args[3];
+		}
+		else{
+			stateFile = "file:///" + System.getProperty("java.io.tmpdir") + "/feedbacklooptempdir/CC-checkpoint";
+		}
 		new IterativeConnectedComponents().runCC();
 	}
 //	private static TestingCluster cluster;
@@ -143,27 +150,109 @@ public class IterativeConnectedComponents {
 		new Integer[]{16, 1}
 	};
 
-	private static DataStream<Edge> getEdgesDataSet(StreamExecutionEnvironment env) {
+	/**
+	 * Tuple2(number, boolean if number has entered the iteration body before)
+	 */
+	private static class NumberSource extends RichParallelSourceFunction<String> implements ListCheckpointed<Long> {
+		private boolean isRunning = true;
+		private int probability;
+		private int speed;
+		private String fileName;
+		private long lineNumber;
+		private long localLineNumber;
 
-		return env.readTextFile(inputFile )
-			.flatMap(new FlatMapFunction<String, Edge>() {
-				@Override
-				public void flatMap(String value, Collector<Edge> out) throws Exception {
-					String[] s = value.split("\\s+");
-					int a = Integer.parseInt(s[0]);
-					int b = Integer.parseInt(s[1]);
-					out.collect(new Edge(a, b));
-					out.collect(new Edge(b, a));
+		public NumberSource(int probability, int speed, String fileName) {
+			this.probability = probability;
+			this.speed = speed;
+			this.fileName = fileName;
+			this.lineNumber = 0;
+			this.localLineNumber = 0;
+		}
+
+		@Override
+		public void run(SourceContext<String> ctx) throws Exception {
+			final Object lock = ctx.getCheckpointLock();
+			FileReader file = new FileReader(fileName);
+			BufferedReader br = new BufferedReader(file);
+			String s = br.readLine();
+
+			while (isRunning ) {
+				if(s == null){
+//					Thread.sleep(1000);
+//					System.out.println("HERE");
+//					continue;
+					break;
 				}
-			});
+				synchronized (lock) {
+					if(localLineNumber < lineNumber) {
+						System.out.println(localLineNumber+" "+lineNumber);
+						localLineNumber++;
+						s = br.readLine();
+						continue;
+					}
+					if(s.startsWith("#")){
+						s = br.readLine();
+						continue;
+					}
+
+					ctx.collect(s);
+					localLineNumber++;
+					lineNumber++;
+//					Thread.sleep(speed); //cannot remove thread.sleep coz number generation will be too fast that it will trigger RTE before the first checkpoint (i.e. no recovery from checkpoint happens)
+
+				}
+
+				s = br.readLine();
+			}
+		}
+
+		@Override
+		public void cancel() {
+			isRunning = false;
+		}
+
+		@Override
+		public List<Long> snapshotState(long checkpointId, long timestamp) throws Exception {
+			LOG.debug("Linenumber save tuple={}", lineNumber);
+			return Collections.singletonList(lineNumber);
+		}
+
+		@Override
+		public void restoreState(List<Long> state) throws Exception {
+			for (Long s : state) {
+				lineNumber = s;
+				LOG.debug("Linenumber load tuple={}", lineNumber);
+			}
+		}
 	}
 
+	private static DataStream<Edge> getEdgesDataSet(StreamExecutionEnvironment env) {
+
+		return
+//			env.readTextFile(inputFile)
+			env.addSource(new NumberSource(5000, 1, inputFile))
+				.flatMap(new FlatMapFunction<String, Edge>() {
+					@Override
+					public void flatMap(String value, Collector<Edge> out) throws Exception {
+						String[] s = value.split("\\s+");
+						int a = Integer.parseInt(s[0]);
+						int b = Integer.parseInt(s[1]);
+						out.collect(new Edge(a, b));
+						out.collect(new Edge(b, a));
+					}
+				});
+	}
+
+	private static final String TOUCH_FILE = System.getProperty("java.io.tmpdir") + "/CC-CheckpointStateTest.marker";
 
 	//	@Test
 	public void runCC() throws Exception {
 
 		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-//		env.setParallelism(1);
+		env.getCheckpointConfig().setCheckpointInterval(2000);
+		env.getCheckpointConfig().setForceCheckpointing(true);
+		env.setStateBackend(new FsStateBackend(stateFile, false));
+		env.setParallelism(1);
 		ArrayList<Edge> edges = new ArrayList<>();
 
 		for (Integer[] o : EDGES) {
@@ -399,10 +488,10 @@ public class IterativeConnectedComponents {
 					return value.isLeft();
 				}
 			})
-			.map(new MapFunction<Either<Label, EOS>, Tuple2<Integer, Integer>>() {
+			.map(new MapFunction<Either<Label, EOS>, Tuple3<Integer, Integer, Long>>() {
 				@Override
-				public Tuple2<Integer, Integer> map(Either<Label, EOS> label) throws Exception {
-					return new Tuple2<Integer, Integer>(label.left().vid, label.left().minLabel);
+				public Tuple3<Integer, Integer, Long> map(Either<Label, EOS> label) throws Exception {
+					return new Tuple3<Integer, Integer, Long>(label.left().vid, label.left().minLabel, System.currentTimeMillis());
 				}
 			})
 			.writeAsCsv(outputFile, FileSystem.WriteMode.OVERWRITE, "\n", " ")
