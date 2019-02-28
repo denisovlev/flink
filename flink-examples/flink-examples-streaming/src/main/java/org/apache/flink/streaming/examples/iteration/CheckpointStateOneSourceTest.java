@@ -46,13 +46,15 @@ public class CheckpointStateOneSourceTest {
 		env.getCheckpointConfig().setCheckpointInterval(checkpointInterval);
 		env.getCheckpointConfig().setForceCheckpointing(true);
 		env.setStateBackend(new FsStateBackend("file:///" + System.getProperty("java.io.tmpdir") + "/feedbacklooptempdir/checkpoint", false));
+		env.setParallelism(1);
 
 		int finalParallelism = parallelism;
-		DataStream<Tuple2<Long, Boolean>> inputStream = env.addSource(new NumberSource(endNumber, probability, speed))
-			.setParallelism(parallelism)
-			.keyBy(value -> value.f0 % finalParallelism);
-		IterativeStream<Tuple2<Long, Boolean>> iteration = inputStream.map(CheckpointStateOneSourceTest::noOpMap).iterate();
-		DataStream<Tuple2<Long, Boolean>> iterationBody = iteration.map(new ChecksumChecker());
+		DataStream<Tuple2<Long, Boolean>> inputStream = env.addSource(new NumberSource(endNumber, probability, speed));
+		IterativeStream<Tuple2<Long, Boolean>> iteration = inputStream
+			.map(CheckpointStateOneSourceTest::noOpMap)
+			.setParallelism(finalParallelism)
+			.iterate();
+		DataStream<Tuple2<Long, Boolean>> iterationBody = iteration.map(new ChecksumChecker()).setParallelism(finalParallelism);
 
 		SplitStream<Tuple2<Long, Boolean>> splitStream = iterationBody.split((OutputSelector<Tuple2<Long, Boolean>>) tuple -> {
 			List<String> output = new ArrayList<>();
@@ -102,15 +104,15 @@ public class CheckpointStateOneSourceTest {
 
 						Thread.sleep(speed); //cannot remove thread.sleep coz number generation will be too fast that it will trigger RTE before the first checkpoint (i.e. no recovery from checkpoint happens)
 
-						Random random = new Random();
-						if (random.nextInt(probability) == 1) { // probability of RTE needs to be low enough that it will be triggered after the first checkpoint
-							File f = new File(TOUCH_FILE);
-							if (!f.exists()) {
-								f.createNewFile();
-								LOG.debug("*********THROW RTE*********");
-								throw new RuntimeException();
-							}
-						}
+//						Random random = new Random();
+//						if (random.nextInt(probability) == 1) { // probability of RTE needs to be low enough that it will be triggered after the first checkpoint
+//							File f = new File(TOUCH_FILE);
+//							if (!f.exists()) {
+//								f.createNewFile();
+//								LOG.debug("*********THROW RTE*********");
+//								throw new RuntimeException();
+//							}
+//						}
 					}
 				}
 			}
