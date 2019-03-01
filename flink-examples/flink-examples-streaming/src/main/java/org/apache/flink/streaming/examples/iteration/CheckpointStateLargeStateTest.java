@@ -153,7 +153,7 @@ public class CheckpointStateLargeStateTest {
 
 		@Override
 		public List<Byte> snapshotState(long checkpointId, long timestamp) throws Exception {
-			LOG.debug("ChecksumChecker save tuple={}", sumBytes);
+			LOG.debug("ChecksumChecker save tuple={}", getSum());
 			List<Byte> bytes = new ArrayList<>();
 			for (byte b : sumBytes) {
 				bytes.add(b);
