@@ -100,9 +100,9 @@ public class CheckpointStateLargeStateTest {
 				if (number <= endNumber) {
 					synchronized (lock) {
 						ctx.collect(new Tuple2<Long, Boolean>(number++, false));
-
-						Thread.sleep(speed); //cannot remove thread.sleep coz number generation will be too fast that it will trigger RTE before the first checkpoint (i.e. no recovery from checkpoint happens)
 					}
+
+					Thread.sleep(speed); //cannot remove thread.sleep coz number generation will be too fast that it will trigger RTE before the first checkpoint (i.e. no recovery from checkpoint happens)
 				}
 			}
 		}
