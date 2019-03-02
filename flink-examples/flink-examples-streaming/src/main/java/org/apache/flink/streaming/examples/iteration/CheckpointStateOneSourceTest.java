@@ -13,11 +13,9 @@ import org.apache.flink.streaming.api.functions.source.RichParallelSourceFunctio
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.File;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Random;
 
 public class CheckpointStateOneSourceTest {
 	private static final Logger LOG = LoggerFactory.getLogger(CheckpointStateOneSourceTest.class);
@@ -45,7 +43,8 @@ public class CheckpointStateOneSourceTest {
 		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment().setBufferTimeout(1);
 		env.getCheckpointConfig().setCheckpointInterval(checkpointInterval);
 		env.getCheckpointConfig().setForceCheckpointing(true);
-		env.setStateBackend(new FsStateBackend("file:///" + System.getProperty("java.io.tmpdir") + "/feedbacklooptempdir/checkpoint", false));
+		//		env.setStateBackend(new FsStateBackend("file:///" + System.getProperty("java.io.tmpdir") + "/feedbacklooptempdir/checkpoint", false));
+		env.setStateBackend(new FsStateBackend("hdfs:///user/hadoop/flink-loop-temp/checkpointtest/checkpoint", false));
 		env.setParallelism(1);
 
 		int finalParallelism = parallelism;

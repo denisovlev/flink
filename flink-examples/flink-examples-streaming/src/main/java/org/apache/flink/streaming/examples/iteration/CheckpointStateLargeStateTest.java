@@ -46,7 +46,9 @@ public class CheckpointStateLargeStateTest {
 		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment().setBufferTimeout(1);
 		env.getCheckpointConfig().setCheckpointInterval(checkpointInterval);
 		env.getCheckpointConfig().setForceCheckpointing(true);
-		env.setStateBackend(new FsStateBackend("file:///" + System.getProperty("java.io.tmpdir") + "/feedbacklooptempdir/checkpoint", false));
+		//		env.setStateBackend(new FsStateBackend("file:///" + System.getProperty("java.io.tmpdir") + "/feedbacklooptempdir/checkpoint", false));
+		env.setStateBackend(new FsStateBackend("hdfs:///user/hadoop/flink-loop-temp/checkpointtest/checkpoint", false));
+
 		env.setParallelism(1);
 
 		int finalParallelism = parallelism;
