@@ -32,7 +32,7 @@ public class CheckpointStateLargeStateTest {
 		int probability = 5000;
 		int speed = 1;
 		int parallelism = 2;
-		int stateSizeMB = 1;
+		int stateSizeBytes = 8;
 
 		if (args.length >= 6) {
 			checkpointInterval = Integer.parseInt(args[0]);
@@ -40,7 +40,19 @@ public class CheckpointStateLargeStateTest {
 			probability = Integer.parseInt(args[2]);
 			speed = Integer.parseInt(args[3]);
 			parallelism = Integer.parseInt(args[4]);
-			stateSizeMB = Integer.parseInt(args[5]);
+
+			String stateSizeArg = args[5];
+			char unit = stateSizeArg.charAt(stateSizeArg.length() - 1);
+			switch (unit) {
+				case 'M':
+					stateSizeBytes = Integer.parseInt(stateSizeArg.substring(0, stateSizeArg.length() - 1)) * 1024 * 1024;
+					break;
+				case 'K':
+					stateSizeBytes = Integer.parseInt(stateSizeArg.substring(0, stateSizeArg.length() - 1)) * 1024;
+					break;
+				default:
+					stateSizeBytes = Integer.parseInt(stateSizeArg);
+			}
 		}
 
 		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment().setBufferTimeout(1);
@@ -57,7 +69,7 @@ public class CheckpointStateLargeStateTest {
 			.map(CheckpointStateLargeStateTest::noOpMap)
 			.setParallelism(finalParallelism)
 			.iterate();
-		DataStream<Tuple2<Long, Boolean>> iterationBody = iteration.map(new ChecksumChecker(stateSizeMB)).setParallelism(finalParallelism);
+		DataStream<Tuple2<Long, Boolean>> iterationBody = iteration.map(new ChecksumChecker(stateSizeBytes)).setParallelism(finalParallelism);
 
 		SplitStream<Tuple2<Long, Boolean>> splitStream = iterationBody.split((OutputSelector<Tuple2<Long, Boolean>>) tuple -> {
 			List<String> output = new ArrayList<>();
@@ -133,9 +145,9 @@ public class CheckpointStateLargeStateTest {
 		private int stateSizeBytes;
 		private byte[] sumBytes;
 
-		public ChecksumChecker(int stateSizeMB) {
-			stateSizeBytes = stateSizeMB * 1024 * 1024;
-			sumBytes = new byte[stateSizeBytes];
+		public ChecksumChecker(int stateSizeBytes) {
+			this.stateSizeBytes = stateSizeBytes;
+			this.sumBytes = new byte[stateSizeBytes];
 		}
 
 		@Override
