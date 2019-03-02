@@ -47,7 +47,7 @@ public class CheckpointStateLargeStateTest {
 		env.getCheckpointConfig().setCheckpointInterval(checkpointInterval);
 		env.getCheckpointConfig().setForceCheckpointing(true);
 		//		env.setStateBackend(new FsStateBackend("file:///" + System.getProperty("java.io.tmpdir") + "/feedbacklooptempdir/checkpoint", false));
-		env.setStateBackend(new FsStateBackend("hdfs:///user/hadoop/flink-loop-temp/checkpointtest/checkpoint", false));
+		env.setStateBackend(new FsStateBackend("hdfs://ibm-power-1.dima.tu-berlin.de:44000/user/hadoop/flink-loop-temp/checkpointtest/checkpoint", false));
 
 		env.setParallelism(1);
 
