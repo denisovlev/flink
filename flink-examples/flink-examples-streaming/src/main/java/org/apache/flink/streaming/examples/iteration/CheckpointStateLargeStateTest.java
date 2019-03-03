@@ -128,7 +128,7 @@ public class CheckpointStateLargeStateTest {
 
 		@Override
 		public List<Long> snapshotState(long checkpointId, long timestamp) throws Exception {
-			LOG.debug("NumberSource save tuple={}", number);
+			LOG.debug("[{}] NumberSource save tuple={}", System.currentTimeMillis(), number);
 			return Collections.singletonList(number);
 		}
 
@@ -136,7 +136,7 @@ public class CheckpointStateLargeStateTest {
 		public void restoreState(List<Long> state) throws Exception {
 			for (Long s : state) {
 				number = s;
-				LOG.debug("NumberSource load tuple={}", number);
+				LOG.debug("[{}] NumberSource load tuple={}", System.currentTimeMillis(), number);
 			}
 		}
 	}
@@ -144,6 +144,7 @@ public class CheckpointStateLargeStateTest {
 	private class ChecksumChecker implements MapFunction<Tuple2<Long, Boolean>, Tuple2<Long, Boolean>>, ListCheckpointed<Byte> {
 		private int stateSizeBytes;
 		private byte[] sumBytes;
+		private boolean recovered = false;
 
 		public ChecksumChecker(int stateSizeBytes) {
 			this.stateSizeBytes = stateSizeBytes;
@@ -156,7 +157,7 @@ public class CheckpointStateLargeStateTest {
 				// if tuple already entered the loop in a previous iteration
 				long newSum = getSum() + tuple.f0;
 				setSum(newSum);
-				LOG.debug("tuple={} sum={}", tuple.f0, newSum);
+				LOG.debug("[{}] tuple={} sum={} recovered={}", System.currentTimeMillis(), tuple.f0, newSum, recovered);
 				tuple.f1 = false;
 			} else {
 				// first time entering iterationBody
@@ -167,7 +168,7 @@ public class CheckpointStateLargeStateTest {
 
 		@Override
 		public List<Byte> snapshotState(long checkpointId, long timestamp) throws Exception {
-			LOG.debug("ChecksumChecker save tuple={}", getSum());
+			LOG.debug("[{}] ChecksumChecker save tuple={} recovered={}", System.currentTimeMillis(), getSum(), recovered);
 			List<Byte> bytes = new ArrayList<>();
 			for (byte b : sumBytes) {
 				bytes.add(b);
@@ -186,7 +187,9 @@ public class CheckpointStateLargeStateTest {
 				sumBytes[i] = state.get(i);
 			}
 
-			LOG.debug("ChecksumChecker load tuple={}", getSum());
+			recovered = true;
+
+			LOG.debug("[{}] ChecksumChecker load tuple={} recovered={}", System.currentTimeMillis(), getSum(), recovered);
 		}
 
 		private long getSum() {
