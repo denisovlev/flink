@@ -56,6 +56,8 @@ public class IterativeConnectedComponents {
 	private static String outputFile = "";
 	private static String stateFile = "";
 	private static long iterationTimeout = 0L;
+	private static long checkPointInterval = 0L;
+	private static long minPauseBetweenCheckpoint = 0L;
 
 	public static void main(String args[]) throws Exception{
 		inputFile = args[0];
@@ -67,6 +69,8 @@ public class IterativeConnectedComponents {
 		else{
 			stateFile = "file:///" + System.getProperty("java.io.tmpdir") + "/feedbacklooptempdir/CC-checkpoint";
 		}
+		checkPointInterval = Long.parseLong(args[4]);
+		minPauseBetweenCheckpoint = Long.parseLong(args[5]);
 		new IterativeConnectedComponents().runCC();
 	}
 //	private static TestingCluster cluster;
@@ -249,8 +253,9 @@ public class IterativeConnectedComponents {
 	public void runCC() throws Exception {
 
 		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-		env.getCheckpointConfig().setCheckpointInterval(2000);
+		env.getCheckpointConfig().setCheckpointInterval(checkPointInterval);
 		env.getCheckpointConfig().setForceCheckpointing(true);
+		env.getCheckpointConfig().setMinPauseBetweenCheckpoints(minPauseBetweenCheckpoint);
 		env.setStateBackend(new FsStateBackend(stateFile, false));
 //		env.setParallelism(1);
 		ArrayList<Edge> edges = new ArrayList<>();
