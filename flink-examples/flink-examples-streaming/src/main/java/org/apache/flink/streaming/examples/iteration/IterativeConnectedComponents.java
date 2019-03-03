@@ -256,7 +256,7 @@ public class IterativeConnectedComponents {
 		env.getCheckpointConfig().setCheckpointInterval(checkPointInterval);
 		env.getCheckpointConfig().setForceCheckpointing(true);
 		env.getCheckpointConfig().setMinPauseBetweenCheckpoints(minPauseBetweenCheckpoint);
-		env.setStateBackend(new FsStateBackend(stateFile, false));
+		env.setStateBackend(new FsStateBackend(stateFile, true));
 //		env.setParallelism(1);
 		ArrayList<Edge> edges = new ArrayList<>();
 
