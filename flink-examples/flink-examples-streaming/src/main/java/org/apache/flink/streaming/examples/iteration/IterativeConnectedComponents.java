@@ -171,6 +171,7 @@ public class IterativeConnectedComponents {
 			this.speed = speed;
 			this.fileName = fileName;
 			this.lineNumber = 0;
+			this.localLineNumber = 0;
 			this.hasEnded = false;
 		}
 
@@ -277,8 +278,8 @@ public class IterativeConnectedComponents {
 		env.getCheckpointConfig().setCheckpointInterval(Time.minutes(1).toMilliseconds());
 		env.getCheckpointConfig().setForceCheckpointing(true);
 		env.getCheckpointConfig().setMinPauseBetweenCheckpoints(Time.minutes(1).toMilliseconds());
-		env.setStateBackend(new FsStateBackend(stateFile, true));
-		env.setParallelism(4);
+		env.setStateBackend(new FsStateBackend(stateFile, false));
+//		env.setParallelism(4);
 
 		DataStream<Edge> edgesStream = getEdgesDataSet(env);
 		DataStream<Label> labelDataStream =
