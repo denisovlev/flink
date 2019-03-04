@@ -183,7 +183,7 @@ public class CheckpointStateLargeStateTestV2 {
 
 			//Sanity check - size of list should be same as stateSizeBytes. In any case, still load it, coz we just need the first 8 bytes (long).
 			if (state.size() != stateSizeBytes) {
-				LOG.warn("State size from checkpoint ({} bytes) is not equal to expected state size ({} bytes)", state.size(), stateSizeBytes);
+				LOG.warn("State size from checkpoint ({} bytes) is not equal to expected state size ({} bytes)", state.get(0).size(), stateSizeBytes);
 			}
 
 			for (int i = 0; i < sumBytes.length; i++) {
