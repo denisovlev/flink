@@ -1,8 +1,16 @@
 package org.apache.flink.streaming.examples.iteration;
 
+import com.google.common.primitives.Bytes;
 import org.apache.flink.api.common.functions.MapFunction;
+import org.apache.flink.api.common.state.ListState;
+import org.apache.flink.api.common.state.ListStateDescriptor;
+import org.apache.flink.api.common.typeinfo.TypeHint;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.runtime.state.FunctionInitializationContext;
+import org.apache.flink.runtime.state.FunctionSnapshotContext;
 import org.apache.flink.runtime.state.filesystem.FsStateBackend;
+import org.apache.flink.streaming.api.checkpoint.CheckpointedFunction;
 import org.apache.flink.streaming.api.checkpoint.ListCheckpointed;
 import org.apache.flink.streaming.api.collector.selector.OutputSelector;
 import org.apache.flink.streaming.api.datastream.DataStream;
@@ -18,14 +26,14 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-public class CheckpointStateLargeStateTest {
-	private static final Logger LOG = LoggerFactory.getLogger(CheckpointStateLargeStateTest.class);
+public class CheckpointStateLargeStateTestV3 {
+	private static final Logger LOG = LoggerFactory.getLogger(CheckpointStateLargeStateTestV3.class);
 
 	public static void main(String[] args) throws Exception {
-		new CheckpointStateLargeStateTest(args);
+		new CheckpointStateLargeStateTestV3(args);
 	}
 
-	public CheckpointStateLargeStateTest(String[] args) throws Exception {
+	public CheckpointStateLargeStateTestV3(String[] args) throws Exception {
 		int checkpointInterval = 5000;
 		long endNumber = 100000;
 		int probability = 5000;
@@ -65,7 +73,7 @@ public class CheckpointStateLargeStateTest {
 		int finalParallelism = parallelism;
 		DataStream<Tuple2<Long, Boolean>> inputStream = env.addSource(new NumberSource(endNumber, probability, speed));
 		IterativeStream<Tuple2<Long, Boolean>> iteration = inputStream
-			.map(CheckpointStateLargeStateTest::noOpMap)
+			.map(CheckpointStateLargeStateTestV3::noOpMap)
 			.setParallelism(finalParallelism)
 			.iterate();
 		DataStream<Tuple2<Long, Boolean>> iterationBody = iteration.map(new ChecksumChecker(stateSizeBytes)).setParallelism(finalParallelism);
@@ -140,10 +148,12 @@ public class CheckpointStateLargeStateTest {
 		}
 	}
 
-	private class ChecksumChecker implements MapFunction<Tuple2<Long, Boolean>, Tuple2<Long, Boolean>>, ListCheckpointed<Byte> {
+	private class ChecksumChecker implements MapFunction<Tuple2<Long, Boolean>, Tuple2<Long, Boolean>>, CheckpointedFunction {
 		private int stateSizeBytes;
 		private byte[] sumBytes;
 		private boolean recovered = false;
+
+		private transient ListState<List<Byte>> checkpointedState;
 
 		public ChecksumChecker(int stateSizeBytes) {
 			this.stateSizeBytes = stateSizeBytes;
@@ -166,31 +176,34 @@ public class CheckpointStateLargeStateTest {
 		}
 
 		@Override
-		public List<Byte> snapshotState(long checkpointId, long timestamp) throws Exception {
+		public void snapshotState(FunctionSnapshotContext context) throws Exception {
 			LOG.debug("[{}] ChecksumChecker save tuple={} recovered={}", System.currentTimeMillis(), getSum(), recovered);
-			List<Byte> bytes = new ArrayList<>();
-			for (byte b : sumBytes) {
-				bytes.add(b);
-			}
-			return bytes;
+			checkpointedState.clear();
+			checkpointedState.add(Bytes.asList(sumBytes));
 		}
 
 		@Override
-		public void restoreState(List<Byte> state) throws Exception {
-			LOG.debug("[{}] restore", System.currentTimeMillis());
+		public void initializeState(FunctionInitializationContext context) throws Exception {
+			checkpointedState = context.getOperatorStateStore().getListState(new ListStateDescriptor<>("sum",
+				TypeInformation.of(new TypeHint<List<Byte>>() {
+				})));
 
-			//Sanity check - size of list should be same as stateSizeBytes. In any case, still load it, coz we just need the first 8 bytes (long).
-			if (state.size() != stateSizeBytes) {
-				LOG.warn("State size from checkpoint ({} bytes) is not equal to expected state size ({} bytes)", state.size(), stateSizeBytes);
+			if (context.isRestored()) {
+				for (List<Byte> state : checkpointedState.get()) {
+					LOG.debug("[{}] restore", System.currentTimeMillis());
+
+					//Sanity check - size of list should be same as stateSizeBytes. In any case, still load it, coz we just need the first 8 bytes (long).
+					if (state.size() != stateSizeBytes) {
+						LOG.warn("State size from checkpoint ({} bytes) is not equal to expected state size ({} bytes)", state.size(), stateSizeBytes);
+					}
+
+					sumBytes = Bytes.toArray(state);
+
+					recovered = true;
+
+					LOG.debug("[{}] ChecksumChecker load tuple={} recovered={}", System.currentTimeMillis(), getSum(), recovered);
+				}
 			}
-
-			for (int i = 0; i < sumBytes.length; i++) {
-				sumBytes[i] = state.get(i);
-			}
-
-			recovered = true;
-
-			LOG.debug("[{}] ChecksumChecker load tuple={} recovered={}", System.currentTimeMillis(), getSum(), recovered);
 		}
 
 		private long getSum() {

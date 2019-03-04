@@ -18,14 +18,14 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-public class CheckpointStateLargeStateTest {
-	private static final Logger LOG = LoggerFactory.getLogger(CheckpointStateLargeStateTest.class);
+public class CheckpointStateLargeStateTestV2 {
+	private static final Logger LOG = LoggerFactory.getLogger(CheckpointStateLargeStateTestV2.class);
 
 	public static void main(String[] args) throws Exception {
-		new CheckpointStateLargeStateTest(args);
+		new CheckpointStateLargeStateTestV2(args);
 	}
 
-	public CheckpointStateLargeStateTest(String[] args) throws Exception {
+	public CheckpointStateLargeStateTestV2(String[] args) throws Exception {
 		int checkpointInterval = 5000;
 		long endNumber = 100000;
 		int probability = 5000;
@@ -65,7 +65,7 @@ public class CheckpointStateLargeStateTest {
 		int finalParallelism = parallelism;
 		DataStream<Tuple2<Long, Boolean>> inputStream = env.addSource(new NumberSource(endNumber, probability, speed));
 		IterativeStream<Tuple2<Long, Boolean>> iteration = inputStream
-			.map(CheckpointStateLargeStateTest::noOpMap)
+			.map(CheckpointStateLargeStateTestV2::noOpMap)
 			.setParallelism(finalParallelism)
 			.iterate();
 		DataStream<Tuple2<Long, Boolean>> iterationBody = iteration.map(new ChecksumChecker(stateSizeBytes)).setParallelism(finalParallelism);
@@ -140,7 +140,7 @@ public class CheckpointStateLargeStateTest {
 		}
 	}
 
-	private class ChecksumChecker implements MapFunction<Tuple2<Long, Boolean>, Tuple2<Long, Boolean>>, ListCheckpointed<Byte> {
+	private class ChecksumChecker implements MapFunction<Tuple2<Long, Boolean>, Tuple2<Long, Boolean>>, ListCheckpointed<ArrayList<Byte>> {
 		private int stateSizeBytes;
 		private byte[] sumBytes;
 		private boolean recovered = false;
@@ -166,17 +166,19 @@ public class CheckpointStateLargeStateTest {
 		}
 
 		@Override
-		public List<Byte> snapshotState(long checkpointId, long timestamp) throws Exception {
+		public List<ArrayList<Byte>> snapshotState(long checkpointId, long timestamp) throws Exception {
 			LOG.debug("[{}] ChecksumChecker save tuple={} recovered={}", System.currentTimeMillis(), getSum(), recovered);
 			List<Byte> bytes = new ArrayList<>();
 			for (byte b : sumBytes) {
 				bytes.add(b);
 			}
-			return bytes;
+			List arr = new ArrayList();
+			arr.add(bytes);
+			return arr;
 		}
 
 		@Override
-		public void restoreState(List<Byte> state) throws Exception {
+		public void restoreState(List<ArrayList<Byte>> state) throws Exception {
 			LOG.debug("[{}] restore", System.currentTimeMillis());
 
 			//Sanity check - size of list should be same as stateSizeBytes. In any case, still load it, coz we just need the first 8 bytes (long).
@@ -185,7 +187,7 @@ public class CheckpointStateLargeStateTest {
 			}
 
 			for (int i = 0; i < sumBytes.length; i++) {
-				sumBytes[i] = state.get(i);
+				sumBytes[i] = state.get(0).get(i);
 			}
 
 			recovered = true;
