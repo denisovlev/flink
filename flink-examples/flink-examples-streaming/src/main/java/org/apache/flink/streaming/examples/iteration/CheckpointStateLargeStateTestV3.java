@@ -179,7 +179,12 @@ public class CheckpointStateLargeStateTestV3 {
 		public void snapshotState(FunctionSnapshotContext context) throws Exception {
 			LOG.debug("[{}] ChecksumChecker save tuple={} recovered={}", System.currentTimeMillis(), getSum(), recovered);
 			checkpointedState.clear();
-			checkpointedState.add(Bytes.asList(sumBytes));
+
+			List<Byte> arr = new ArrayList();
+			for (byte b : sumBytes) {
+				arr.add(b);
+			}
+			checkpointedState.add(arr);
 		}
 
 		@Override
