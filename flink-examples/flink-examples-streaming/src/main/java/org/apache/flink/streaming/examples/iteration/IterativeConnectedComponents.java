@@ -164,13 +164,14 @@ public class IterativeConnectedComponents {
 		private String fileName;
 		private long lineNumber;
 		private long localLineNumber;
+		private boolean hasEnded;
 
 		public NumberSource(int probability, int speed, String fileName) {
 			this.probability = probability;
 			this.speed = speed;
 			this.fileName = fileName;
 			this.lineNumber = 0;
-			this.localLineNumber = 0;
+			this.hasEnded = false;
 		}
 
 		@Override
@@ -182,10 +183,15 @@ public class IterativeConnectedComponents {
 
 			while (isRunning ) {
 				if(s == null){
-//					Thread.sleep(1000);
+
+					if(!hasEnded){
+						ctx.collect("-1 -1");
+						hasEnded = true;
+					}
+					Thread.sleep(1000);
 //					System.out.println("HERE");
-//					continue;
-					break;
+					continue;
+//					break;
 				}
 				synchronized (lock) {
 					if(localLineNumber < lineNumber) {
@@ -218,15 +224,21 @@ public class IterativeConnectedComponents {
 		@Override
 		public List<Long> snapshotState(long checkpointId, long timestamp) throws Exception {
 			LOG.debug("Linenumber save tuple={}", lineNumber);
-			return Collections.singletonList(lineNumber);
+			List<Long> list = new ArrayList<>();
+			list.add(lineNumber);
+			if(hasEnded){
+				list.add(999L);
+			}
+			else{
+				list.add(0L);
+			}
+			return list;
 		}
 
 		@Override
 		public void restoreState(List<Long> state) throws Exception {
-			for (Long s : state) {
-				lineNumber = s;
-				LOG.debug("Linenumber load tuple={}", lineNumber);
-			}
+			lineNumber = state.get(0);
+			hasEnded = (state.get(1) == 999) ? true : false;
 		}
 	}
 
@@ -234,17 +246,26 @@ public class IterativeConnectedComponents {
 
 		return
 //			env.readTextFile(inputFile)
-			env.addSource(new NumberSource(5000, 1, inputFile))
+			env.addSource(new NumberSource(5000, 1, inputFile)).setParallelism(1)
 				.flatMap(new FlatMapFunction<String, Edge>() {
 					@Override
 					public void flatMap(String value, Collector<Edge> out) throws Exception {
+						if(value.startsWith("#")) {
+							return;
+						}
 						String[] s = value.split("\\s+");
 						int a = Integer.parseInt(s[0]);
 						int b = Integer.parseInt(s[1]);
-						out.collect(new Edge(a, b));
-						out.collect(new Edge(b, a));
+						if(a == -1 && b == -1){
+							out.collect(new Edge(-1, -1));
+						}
+						else{
+							out.collect(new Edge(a, b));
+							out.collect(new Edge(b, a));
+						}
+//						System.out.println(a+" "+b);
 					}
-				});
+				}).setParallelism(1);
 	}
 
 	private static final String TOUCH_FILE = System.getProperty("java.io.tmpdir") + "/CC-CheckpointStateTest.marker";
@@ -253,23 +274,11 @@ public class IterativeConnectedComponents {
 	public void runCC() throws Exception {
 
 		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-		env.getCheckpointConfig().setCheckpointInterval(checkPointInterval);
+		env.getCheckpointConfig().setCheckpointInterval(Time.minutes(1).toMilliseconds());
 		env.getCheckpointConfig().setForceCheckpointing(true);
-		env.getCheckpointConfig().setMinPauseBetweenCheckpoints(minPauseBetweenCheckpoint);
+		env.getCheckpointConfig().setMinPauseBetweenCheckpoints(Time.minutes(1).toMilliseconds());
 		env.setStateBackend(new FsStateBackend(stateFile, true));
-//		env.setParallelism(1);
-		ArrayList<Edge> edges = new ArrayList<>();
-
-		for (Integer[] o : EDGES) {
-			edges.add(new Edge(o[0], o[1]));
-			edges.add(new Edge(o[1], o[0]));
-		}
-
-		ArrayList<Label> labels = new ArrayList<>();
-
-		for (int v : VERTICES) {
-			labels.add(new Label(v, v));
-		}
+		env.setParallelism(4);
 
 		DataStream<Edge> edgesStream = getEdgesDataSet(env);
 		DataStream<Label> labelDataStream =
@@ -278,7 +287,7 @@ public class IterativeConnectedComponents {
 				public Label map(Edge value) throws Exception {
 					return new Label(value.u, value.u);
 				}
-			});
+			}).setParallelism(1);
 
 		DataStream<Either<Edge, EOS>> edgeStream =
 			edgesStream
@@ -307,10 +316,15 @@ public class IterativeConnectedComponents {
 					if (this.out == null) {
 						this.out = out;
 					}
+					if (value.u == -1 && value.v == -1){
+						System.out.println("edges: "+helper.size());
+						this.close();
+						return;
+					}
 					out.collect(Either.Left(value));
 					helper.add(value.u);
 				}
-			});
+			}).setParallelism(1);
 
 		DataStream<Either<Label, EOS>> labelStream =
 //			env.fromCollection(labels)
@@ -339,20 +353,24 @@ public class IterativeConnectedComponents {
 					if (this.out == null) {
 						this.out = out;
 					}
+					if (value.vid == -1 && value.minLabel == -1){
+						System.out.println("label: "+helper.size());
+						this.close();
+					}
 					out.collect(Either.Left(value));
 					helper.add(value.minLabel);
 				}
-			});
+			}).setParallelism(1);
 
 		IterativeStream<Either<Label, EOS>> labelsIt = labelStream
-			.forward()
+//			.forward()
 			.map(new MapFunction<Either<Label, EOS>, Either<Label, EOS>>() {
 				@Override
 				public Either<Label, EOS> map(Either<Label, EOS> in) throws Exception {
 					return in;
 				}
 			})
-			.iterate(iterationTimeout);
+			.iterate();
 
 		DataStream<Either<Label, EOS>> nextStep = labelsIt
 			.keyBy(new KeySelector<Either<Label, EOS>, Integer>() {
