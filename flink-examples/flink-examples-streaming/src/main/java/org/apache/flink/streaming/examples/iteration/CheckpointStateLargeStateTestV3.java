@@ -1,6 +1,5 @@
 package org.apache.flink.streaming.examples.iteration;
 
-import com.google.common.primitives.Bytes;
 import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.common.state.ListState;
 import org.apache.flink.api.common.state.ListStateDescriptor;
@@ -202,7 +201,11 @@ public class CheckpointStateLargeStateTestV3 {
 						LOG.warn("State size from checkpoint ({} bytes) is not equal to expected state size ({} bytes)", state.size(), stateSizeBytes);
 					}
 
-					sumBytes = Bytes.toArray(state);
+					byte[] arr = new byte[state.size()];
+					for (int i = 0; i < state.size(); i++) {
+						arr[i] = state.get(i);
+					}
+					sumBytes = arr;
 
 					recovered = true;
 
