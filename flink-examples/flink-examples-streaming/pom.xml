@@ -203,6 +203,50 @@ under the License.
 						</configuration>
 					</execution>
 
+					<!-- Iterative Connected Components -->
+					<execution>
+						<id>IterativeConnectedComponents</id>
+						<phase>package</phase>
+						<goals>
+							<goal>jar</goal>
+						</goals>
+						<configuration>
+							<classifier>IterativeConnectedComponents</classifier>
+
+							<archive>
+								<manifestEntries>
+									<program-class>org.apache.flink.streaming.examples.iteration.IterativeConnectedComponents</program-class>
+								</manifestEntries>
+							</archive>
+
+							<includes>
+								<include>org/apache/flink/streaming/examples/iteration/*.class</include>
+							</includes>
+						</configuration>
+					</execution>
+
+					<!-- Iterative Connected Components -->
+					<execution>
+						<id>CheckCC</id>
+						<phase>package</phase>
+						<goals>
+							<goal>jar</goal>
+						</goals>
+						<configuration>
+							<classifier>CheckCC</classifier>
+
+							<archive>
+								<manifestEntries>
+									<program-class>org.apache.flink.streaming.examples.iteration.CheckCC</program-class>
+								</manifestEntries>
+							</archive>
+
+							<includes>
+								<include>org/apache/flink/streaming/examples/iteration/*.class</include>
+							</includes>
+						</configuration>
+					</execution>
+
 					<!-- IncrementalLearning -->
 					<execution>
 						<id>IncrementalLearning</id>
@@ -504,6 +548,8 @@ under the License.
 								<copy file="${project.basedir}/target/flink-examples-streaming_${scala.binary.version}-${project.version}-IncrementalLearning.jar" tofile="${project.basedir}/target/IncrementalLearning.jar" />
 								<copy file="${project.basedir}/target/flink-examples-streaming_${scala.binary.version}-${project.version}-Iteration.jar" tofile="${project.basedir}/target/Iteration.jar" />
 								<copy file="${project.basedir}/target/flink-examples-streaming_${scala.binary.version}-${project.version}-DeadlockingIteration.jar" tofile="${project.basedir}/target/DeadlockingIteration.jar" />
+								<copy file="${project.basedir}/target/flink-examples-streaming_${scala.binary.version}-${project.version}-IterativeConnectedComponents.jar" tofile="${project.basedir}/target/IterativeConnectedComponents.jar" />
+								<copy file="${project.basedir}/target/flink-examples-streaming_${scala.binary.version}-${project.version}-CheckCC.jar" tofile="${project.basedir}/target/CheckCC.jar" />
 								<copy file="${project.basedir}/target/flink-examples-streaming_${scala.binary.version}-${project.version}-SessionWindowing.jar" tofile="${project.basedir}/target/SessionWindowing.jar" />
 								<copy file="${project.basedir}/target/flink-examples-streaming_${scala.binary.version}-${project.version}-TopSpeedWindowing.jar" tofile="${project.basedir}/target/TopSpeedWindowing.jar" />
 								<copy file="${project.basedir}/target/flink-examples-streaming_${scala.binary.version}-${project.version}-WindowJoin.jar" tofile="${project.basedir}/target/WindowJoin.jar" />

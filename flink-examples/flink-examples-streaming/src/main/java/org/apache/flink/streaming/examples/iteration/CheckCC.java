@@ -26,6 +26,7 @@ import org.apache.flink.api.java.ExecutionEnvironment;
 import org.apache.flink.api.java.operators.FilterOperator;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.api.java.utils.ParameterTool;
+import org.apache.flink.core.fs.FileSystem;
 import org.apache.flink.util.Collector;
 
 public class CheckCC {
@@ -43,7 +44,7 @@ public class CheckCC {
 
 		// make parameters available in the web interface
 		env.getConfig().setGlobalJobParameters(params);
-
+		env.setParallelism(1);
 		// get input data
 		DataSet<String> text;
 		if (params.has("input")) {
@@ -89,7 +90,7 @@ public class CheckCC {
 
 		// emit result
 		if (params.has("output")) {
-			cc.writeAsCsv(params.get("output"), "\n", " ");
+			cc.writeAsCsv(params.get("output"), "\n", " ", FileSystem.WriteMode.OVERWRITE);
 			// execute program
 			env.execute("WordCount Example");
 		} else {

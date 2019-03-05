@@ -10,7 +10,6 @@ import org.apache.flink.api.common.state.ListStateDescriptor;
 import org.apache.flink.api.common.state.ValueState;
 import org.apache.flink.api.common.state.ValueStateDescriptor;
 import org.apache.flink.api.java.functions.KeySelector;
-import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.api.java.tuple.Tuple3;
 import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
@@ -19,7 +18,6 @@ import org.apache.flink.configuration.WebOptions;
 //import org.apache.flink.runtime.testingUtils.TestingCluster;
 import org.apache.flink.core.fs.FileSystem;
 import org.apache.flink.runtime.state.filesystem.FsStateBackend;
-import org.apache.flink.shaded.guava18.com.google.common.collect.Lists;
 import org.apache.flink.streaming.api.checkpoint.ListCheckpointed;
 import org.apache.flink.streaming.api.collector.selector.OutputSelector;
 import org.apache.flink.streaming.api.datastream.DataStream;
@@ -28,10 +26,7 @@ import org.apache.flink.streaming.api.datastream.SplitStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.co.CoProcessFunction;
 import org.apache.flink.streaming.api.functions.source.RichParallelSourceFunction;
-import org.apache.flink.streaming.api.functions.windowing.ProcessWindowFunction;
-import org.apache.flink.streaming.api.windowing.assigners.TumblingProcessingTimeWindows;
 import org.apache.flink.streaming.api.windowing.time.Time;
-import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
 import org.apache.flink.types.Either;
 import org.apache.flink.util.Collector;
 //import org.junit.AfterClass;
@@ -171,6 +166,7 @@ public class IterativeConnectedComponents {
 			this.speed = speed;
 			this.fileName = fileName;
 			this.lineNumber = 0;
+			this.localLineNumber = 0;
 			this.hasEnded = false;
 		}
 
@@ -277,8 +273,8 @@ public class IterativeConnectedComponents {
 		env.getCheckpointConfig().setCheckpointInterval(Time.minutes(1).toMilliseconds());
 		env.getCheckpointConfig().setForceCheckpointing(true);
 		env.getCheckpointConfig().setMinPauseBetweenCheckpoints(Time.minutes(1).toMilliseconds());
-		env.setStateBackend(new FsStateBackend(stateFile, true));
-		env.setParallelism(4);
+		env.setStateBackend(new FsStateBackend(stateFile, false));
+//		env.setParallelism(4);
 
 		DataStream<Edge> edgesStream = getEdgesDataSet(env);
 		DataStream<Label> labelDataStream =
@@ -396,6 +392,7 @@ public class IterativeConnectedComponents {
 				private transient ValueState<Boolean> hasEOF1;
 				private transient ValueState<Boolean> hasEOF2;
 				private transient ValueState<Boolean> minChanged;
+				private boolean localFirstTime = true;
 
 				@Override
 				public void open(Configuration parameters) throws Exception {
@@ -429,6 +426,7 @@ public class IterativeConnectedComponents {
 
 				@Override
 				public void processElement1(Either<Label, EOS> in, Context ctx, Collector<Either<Label, EOS>> out) throws Exception {
+					checkState();
 					if (in.isLeft()) {
 						incCounter(labelsSeenCnt);
 						Integer v;
@@ -468,8 +466,29 @@ public class IterativeConnectedComponents {
 //					return true;
 				}
 
+				private void checkState() throws Exception {
+					if(localFirstTime){
+						localFirstTime = false;
+						System.out.println("!!!!!!!!!!!!!!!!!!!!!!!");
+						System.out.println("RESTORE THE STATE on TaskExecutorId: " + getRuntimeContext().getIndexOfThisSubtask());
+						if(outVertexSeenCnt.value() != null )
+							System.out.println(getRuntimeContext().getIndexOfThisSubtask()+ " outVertexSeenCnt: " + outVertexSeenCnt.value());
+						if(outVertexEndSeenCnt.value() != null )
+							System.out.println(getRuntimeContext().getIndexOfThisSubtask()+ " outVertexEndSeenCnt: " + outVertexEndSeenCnt.value());
+						if(labelsSeenCnt.value() != null )
+							System.out.println(getRuntimeContext().getIndexOfThisSubtask()+ " labelsSeenCnt: " + labelsSeenCnt.value());
+						if(labelsEndSeenCnt.value() != null )
+							System.out.println(getRuntimeContext().getIndexOfThisSubtask()+ " labelsEndSeenCnt: " + labelsEndSeenCnt.value());
+						if(minLabel.value() != null )
+							System.out.println(getRuntimeContext().getIndexOfThisSubtask()+ " minLabel: " + minLabel.value());
+						if(minChanged.value() != null )
+							System.out.println(getRuntimeContext().getIndexOfThisSubtask()+ " minChanged: " + minChanged.value());
+					}
+				}
+
 				@Override
 				public void processElement2(Either<Edge, EOS> in, Context ctx, Collector<Either<Label, EOS>> out) throws Exception {
+					checkState();
 					if (in.isLeft()) {
 						outVertex.add(in.left().u);
 						incCounter(outVertexSeenCnt);
