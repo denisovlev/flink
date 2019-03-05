@@ -426,23 +426,7 @@ public class IterativeConnectedComponents {
 
 				@Override
 				public void processElement1(Either<Label, EOS> in, Context ctx, Collector<Either<Label, EOS>> out) throws Exception {
-					if(localFirstTime){
-						localFirstTime = false;
-						System.out.println("!!!!!!!!!!!!!!!!!!!!!!!");
-						System.out.println("RESTORE THE STATE");
-						if(outVertexSeenCnt.value() != null )
-							System.out.println("outVertexSeenCnt: " + outVertexSeenCnt.value());
-						if(outVertexEndSeenCnt.value() != null )
-							System.out.println("outVertexEndSeenCnt: " + outVertexEndSeenCnt.value());
-						if(labelsSeenCnt.value() != null )
-							System.out.println("labelsSeenCnt: " + labelsSeenCnt.value());
-						if(labelsEndSeenCnt.value() != null )
-							System.out.println("labelsEndSeenCnt: " + labelsEndSeenCnt.value());
-						if(minLabel.value() != null )
-							System.out.println("minLabel: " + minLabel.value());
-						if(minChanged.value() != null )
-							System.out.println("minChanged: " + minChanged.value());
-					}
+					checkState();
 					if (in.isLeft()) {
 						incCounter(labelsSeenCnt);
 						Integer v;
@@ -482,25 +466,29 @@ public class IterativeConnectedComponents {
 //					return true;
 				}
 
-				@Override
-				public void processElement2(Either<Edge, EOS> in, Context ctx, Collector<Either<Label, EOS>> out) throws Exception {
+				private void checkState() throws Exception {
 					if(localFirstTime){
 						localFirstTime = false;
 						System.out.println("!!!!!!!!!!!!!!!!!!!!!!!");
-						System.out.println("RESTORE THE STATE");
+						System.out.println("RESTORE THE STATE on TaskExecutorId: " + getRuntimeContext().getIndexOfThisSubtask());
 						if(outVertexSeenCnt.value() != null )
-							System.out.println("outVertexSeenCnt: " + outVertexSeenCnt.value());
+							System.out.println(getRuntimeContext().getIndexOfThisSubtask()+ " outVertexSeenCnt: " + outVertexSeenCnt.value());
 						if(outVertexEndSeenCnt.value() != null )
-							System.out.println("outVertexEndSeenCnt: " + outVertexEndSeenCnt.value());
+							System.out.println(getRuntimeContext().getIndexOfThisSubtask()+ " outVertexEndSeenCnt: " + outVertexEndSeenCnt.value());
 						if(labelsSeenCnt.value() != null )
-							System.out.println("labelsSeenCnt: " + labelsSeenCnt.value());
+							System.out.println(getRuntimeContext().getIndexOfThisSubtask()+ " labelsSeenCnt: " + labelsSeenCnt.value());
 						if(labelsEndSeenCnt.value() != null )
-							System.out.println("labelsEndSeenCnt: " + labelsEndSeenCnt.value());
+							System.out.println(getRuntimeContext().getIndexOfThisSubtask()+ " labelsEndSeenCnt: " + labelsEndSeenCnt.value());
 						if(minLabel.value() != null )
-							System.out.println("minLabel: " + minLabel.value());
+							System.out.println(getRuntimeContext().getIndexOfThisSubtask()+ " minLabel: " + minLabel.value());
 						if(minChanged.value() != null )
-							System.out.println("minChanged: " + minChanged.value());
+							System.out.println(getRuntimeContext().getIndexOfThisSubtask()+ " minChanged: " + minChanged.value());
 					}
+				}
+
+				@Override
+				public void processElement2(Either<Edge, EOS> in, Context ctx, Collector<Either<Label, EOS>> out) throws Exception {
+					checkState();
 					if (in.isLeft()) {
 						outVertex.add(in.left().u);
 						incCounter(outVertexSeenCnt);
