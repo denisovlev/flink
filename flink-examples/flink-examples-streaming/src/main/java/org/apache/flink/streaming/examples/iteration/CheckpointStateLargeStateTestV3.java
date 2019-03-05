@@ -39,8 +39,9 @@ public class CheckpointStateLargeStateTestV3 {
 		int speed = 1;
 		int parallelism = 2;
 		int stateSizeBytes = 8;
+		int minPauseBetweenCheckpoints = -1;
 
-		if (args.length >= 6) {
+		if (args.length >= 7) {
 			checkpointInterval = Integer.parseInt(args[0]);
 			endNumber = Long.parseLong(args[1]);
 			probability = Integer.parseInt(args[2]);
@@ -59,11 +60,16 @@ public class CheckpointStateLargeStateTestV3 {
 				default:
 					stateSizeBytes = Integer.parseInt(stateSizeArg);
 			}
+
+			minPauseBetweenCheckpoints = Integer.parseInt(args[6]);
 		}
 
 		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment().setBufferTimeout(1);
 		env.getCheckpointConfig().setCheckpointInterval(checkpointInterval);
 		env.getCheckpointConfig().setForceCheckpointing(true);
+		if (minPauseBetweenCheckpoints != -1) {
+			env.getCheckpointConfig().setMinPauseBetweenCheckpoints(minPauseBetweenCheckpoints);
+		}
 		//		env.setStateBackend(new FsStateBackend("file:///" + System.getProperty("java.io.tmpdir") + "/feedbacklooptempdir/checkpoint", false));
 		env.setStateBackend(new FsStateBackend("hdfs://ibm-power-1.dima.tu-berlin.de:44000/user/hadoop/flink-loop-temp/checkpointtest/checkpoint", false));
 
