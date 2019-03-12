@@ -150,7 +150,8 @@ public class IterativeConnectedComponents {
 	};
 
 	/**
-	 * Tuple2(number, boolean if number has entered the iteration body before)
+	 * NumberSource class is used to read input file
+	 * In order to enable checkpointing, we need to implement never ending custom source
 	 */
 	private static class NumberSource extends RichParallelSourceFunction<String> implements ListCheckpointed<Long> {
 		private boolean isRunning = true;
@@ -181,13 +182,12 @@ public class IterativeConnectedComponents {
 				if(s == null){
 
 					if(!hasEnded){
+						// emits sentinel records to mark the end of source file
 						ctx.collect("-1 -1");
 						hasEnded = true;
 					}
 					Thread.sleep(1000);
-//					System.out.println("HERE");
 					continue;
-//					break;
 				}
 				synchronized (lock) {
 					if(localLineNumber < lineNumber) {
@@ -204,8 +204,6 @@ public class IterativeConnectedComponents {
 					ctx.collect(s);
 					localLineNumber++;
 					lineNumber++;
-//					Thread.sleep(speed); //cannot remove thread.sleep coz number generation will be too fast that it will trigger RTE before the first checkpoint (i.e. no recovery from checkpoint happens)
-
 				}
 
 				s = br.readLine();
@@ -222,6 +220,8 @@ public class IterativeConnectedComponents {
 			LOG.debug("Linenumber save tuple={}", lineNumber);
 			List<Long> list = new ArrayList<>();
 			list.add(lineNumber);
+
+			// Encode hasEnded variable as value 999 if hasEnded, 0 otherwise. and put it in ListCheckpoint index 1
 			if(hasEnded){
 				list.add(999L);
 			}
@@ -234,10 +234,16 @@ public class IterativeConnectedComponents {
 		@Override
 		public void restoreState(List<Long> state) throws Exception {
 			lineNumber = state.get(0);
+			// Decode hasEnded variable from list index one, as the decode rules in snapshot state
 			hasEnded = (state.get(1) == 999) ? true : false;
 		}
 	}
 
+	/**
+	 * Generate bidirectional edges for every vertices
+	 * @param env
+	 * @return bidirectional edges stream
+	 */
 	private static DataStream<Edge> getEdgesDataSet(StreamExecutionEnvironment env) {
 
 		return
@@ -266,7 +272,10 @@ public class IterativeConnectedComponents {
 
 	private static final String TOUCH_FILE = System.getProperty("java.io.tmpdir") + "/CC-CheckpointStateTest.marker";
 
-	//	@Test
+	/**
+	 * Run connected components
+	 * @throws Exception
+	 */
 	public void runCC() throws Exception {
 
 		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
@@ -274,7 +283,7 @@ public class IterativeConnectedComponents {
 		env.getCheckpointConfig().setForceCheckpointing(true);
 		env.getCheckpointConfig().setMinPauseBetweenCheckpoints(Time.minutes(1).toMilliseconds());
 		env.setStateBackend(new FsStateBackend(stateFile, false));
-//		env.setParallelism(4);
+//		env.setParallelism(2);
 
 		DataStream<Edge> edgesStream = getEdgesDataSet(env);
 		DataStream<Label> labelDataStream =
@@ -285,6 +294,7 @@ public class IterativeConnectedComponents {
 				}
 			}).setParallelism(1);
 
+		// create edges stream with EOS markers
 		DataStream<Either<Edge, EOS>> edgeStream =
 			edgesStream
 //			env.fromCollection(edges)
@@ -322,6 +332,7 @@ public class IterativeConnectedComponents {
 				}
 			}).setParallelism(1);
 
+		// create label stream with EOS markers
 		DataStream<Either<Label, EOS>> labelStream =
 //			env.fromCollection(labels)
 			labelDataStream
@@ -358,6 +369,7 @@ public class IterativeConnectedComponents {
 				}
 			}).setParallelism(1);
 
+		// set iteration here
 		IterativeStream<Either<Label, EOS>> labelsIt = labelStream
 //			.forward()
 			.map(new MapFunction<Either<Label, EOS>, Either<Label, EOS>>() {
@@ -368,6 +380,7 @@ public class IterativeConnectedComponents {
 			})
 			.iterate();
 
+		// time-agnostic join happens here
 		DataStream<Either<Label, EOS>> nextStep = labelsIt
 			.keyBy(new KeySelector<Either<Label, EOS>, Integer>() {
 				@Override
@@ -441,6 +454,7 @@ public class IterativeConnectedComponents {
 						hasEOF1.update(true);
 						Integer minVal;
 						incCounter(labelsEndSeenCnt);
+						// output at the end of the stream if we have seen all and the min value is changed
 						if (hasEOF2.value() != null && hasEOF2.value() && (minVal = minLabel.value()) != null && minChangedValue() && seenAll()) {
 							for (int vertex : outVertex.get()) {
 								out.collect(Either.Left(new Label(vertex, minVal)));
@@ -463,7 +477,6 @@ public class IterativeConnectedComponents {
 
 				private boolean minChangedValue() throws java.io.IOException {
 					return minChanged.value() != null && minChanged.value();
-//					return true;
 				}
 
 				private void checkState() throws Exception {
@@ -496,6 +509,7 @@ public class IterativeConnectedComponents {
 						incCounter(outVertexEndSeenCnt);
 						hasEOF2.update(true);
 						Integer minVal;
+						// output at the end of the stream if we have seen all and the min value is changed
 						if (hasEOF1.value() != null && hasEOF1.value() && (minVal = minLabel.value()) != null && minChangedValue()  && seenAll()) {
 							for (int vertex : outVertex.get()) {
 								out.collect(Either.Left(new Label(vertex, minVal)));
@@ -522,7 +536,6 @@ public class IterativeConnectedComponents {
 		labelsIt
 			.closeWith(splitStream.select("iterate"));
 
-//		labelsIt.print();
 		splitStream.select("output")
 			.filter(new FilterFunction<Either<Label, EOS>>() {
 				@Override
@@ -537,27 +550,6 @@ public class IterativeConnectedComponents {
 				}
 			})
 			.writeAsCsv(outputFile, FileSystem.WriteMode.OVERWRITE, "\n", " ")
-//			.keyBy(new KeySelector<Either<Label,EOS>, Integer>() {
-//				@Override
-//				public Integer getKey(Either<Label, EOS> value) throws Exception {
-//					return value.left().minLabel;
-//				}
-//			})
-//			.window(TumblingProcessingTimeWindows.of(Time.seconds(10)))
-//			.process(new ProcessWindowFunction<Either<Label,EOS>, Tuple2<Integer, String>, Integer, TimeWindow>() {
-//				@Override
-//				public void process(Integer key, Context context, Iterable<Either<Label, EOS>> elements, Collector<Tuple2<Integer, String>> out) throws Exception {
-//					HashSet<String> set = new HashSet<String>();
-//					for(Either<Label, EOS> element: elements){
-//						set.add(Integer.toString(element.left().vid));
-//					}
-////					String s = String.join("|", set);
-//					String s = Integer.toString(set.size());
-//					out.collect(new Tuple2<>(key, s));
-//				}
-//
-//			})
-//			.print()
 			;
 
 		env.execute();
