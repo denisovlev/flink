@@ -88,6 +88,7 @@ public class StreamIterationHead<OUT> extends OneInputStreamTask<OUT, OUT> {
 
 		StreamElementSerializer<OUT> streamElementSerializer = createRecordSerializer();
 		StreamElementOrEventSerializer<OUT> serializer = new StreamElementOrEventSerializer<OUT>(streamElementSerializer);
+		// the number of records spillable queue can hold is a tradeoff between memory and performance
 		SpillableQueue<Either<StreamRecord<OUT>, CheckpointBarrier>> dataChannel = new SpillableQueue<>(1024 * 8, serializer);
 
 		// offer the queue for the tail
@@ -185,6 +186,8 @@ public class StreamIterationHead<OUT> extends OneInputStreamTask<OUT, OUT> {
 
 		//create a buffer for logging the initiated snapshot and broadcast a barrier for it
 		synchronized (getCheckpointLock()) {
+			//	we create log slices to support multiple concurrent checkpoints
+			// 	see more https://github.com/apache/flink/pull/1668#issuecomment-266572177
 			upstreamLogger.createSlice(String.valueOf(checkpointMetaData.getCheckpointId()));
 			operatorChain.broadcastCheckpointBarrier(checkpointMetaData.getCheckpointId(), checkpointMetaData.getTimestamp(), checkpointOptions);
 		}

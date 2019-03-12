@@ -15,6 +15,10 @@ import org.apache.flink.types.Either;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 
+/**
+ * This class is able to serialize records and checkpoint barrier events
+ * @param <IN> Type of the records
+ */
 public class StreamElementOrEventSerializer<IN> implements ItemSerializer<Either<StreamRecord<IN>, CheckpointBarrier>> {
 
 	private static final int STREAM_ELEMENT = 0;
@@ -80,6 +84,7 @@ public class StreamElementOrEventSerializer<IN> implements ItemSerializer<Either
 	}
 
 	//	EventSerializer cannot work with a stream, d'oh
+	// extracted part of code from EventSerializer and modified for working with streams
 	private static CheckpointBarrier deserializeCheckpointBarrier(DataInputViewStreamWrapper buffer) throws IOException {
 		buffer.readInt(); // read the event type == checkpoint
 		final long id = buffer.readLong();

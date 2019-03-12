@@ -23,7 +23,7 @@ import java.util.concurrent.locks.ReentrantLock;
 /**
  * SpillableQueue: Implementation of HALF algorithm for queue spilling to disk.
  * http://ilpubs.stanford.edu:8090/618/1/2003-63.pdf
- * @param <E>
+ * @param <E> Type of the queue elements
  */
 public class SpillableQueue<E> {
 
@@ -57,6 +57,10 @@ public class SpillableQueue<E> {
 
 	final ReentrantLock lock;
 
+	/**
+	 * @param m Capacity of head and tail of the queue. The full capacity of the queue is 2*m
+	 * @param serializer Serializer/Deserializer for queue elements
+	 */
 	SpillableQueue(Integer m, ItemSerializer<E> serializer) {
 		this.m = m;
 		this.serializer = serializer;
@@ -195,6 +199,11 @@ class SpilledBuffer<E> {
 	DataOutputViewStreamWrapper out;
 	DataInputViewStreamWrapper in;
 
+	/**
+	 * @param size Number of records the buffer can hold
+	 * @param serializer Serializer/Deserializer for buffer elements
+	 * @throws IOException
+	 */
 	SpilledBuffer(int size, ItemSerializer<E> serializer) throws IOException {
 		this.size = size;
 		this.serializer = serializer;
